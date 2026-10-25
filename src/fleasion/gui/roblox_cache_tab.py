@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sqlite3
 import time
 from pathlib import Path
 
@@ -206,6 +207,8 @@ class RobloxCacheTab(QWidget):
                 self.table.setItem(row, column, item)
         self.table.setUpdatesEnabled(True)
         self.table.resizeColumnsToContents()
+        self.table.setColumnWidth(0, 270)
+        self.table.setColumnWidth(7, 400)
 
     def refresh(self) -> None:
         root = self.root_edit.text().strip().strip('"')
