@@ -195,7 +195,7 @@ class LocalDatabaseEditorWidget(QWidget):
         self.sql_tab = QWidget()
         sql_layout = QVBoxLayout(self.sql_tab)
         sql_layout.addWidget(QLabel(
-            "Read-only SQL console. Only SELECT, read-only WITH, and EXPLAIN statements are accepted."
+            "SQL console opens read-only. Enabling write SQL requires confirmation and backs up the database before each write."
         ))
         self.sql_edit = QPlainTextEdit(
             "SELECT name, type, sql FROM sqlite_master "
@@ -204,10 +204,13 @@ class LocalDatabaseEditorWidget(QWidget):
         self.sql_edit.setMinimumHeight(110)
         sql_layout.addWidget(self.sql_edit)
         sql_toolbar = QHBoxLayout()
-        run_query = QPushButton("Run read-only query")
+        self.write_sql_check = QCheckBox("Enable write SQL…")
+        self.write_sql_check.toggled.connect(self._toggle_write_sql)
+        sql_toolbar.addWidget(self.write_sql_check)
+        run_query = QPushButton("Execute SQL")
         run_query.clicked.connect(self._run_query)
         sql_toolbar.addWidget(run_query)
-        self.query_status = QLabel("Results are limited to 500 rows.")
+        self.query_status = QLabel("Read-only queries return up to 500 rows; writes create a backup first.")
         sql_toolbar.addWidget(self.query_status, 1)
         sql_layout.addLayout(sql_toolbar)
         self.query_grid = QTableWidget()
@@ -595,10 +598,46 @@ class LocalDatabaseEditorWidget(QWidget):
         self.page_offset = 0
         self._refresh_current_table()
 
+    def _toggle_write_sql(self, enabled: bool) -> None:
+        if enabled:
+            answer = QMessageBox.warning(
+                self,
+                "Enable SQL writes?",
+                "This allows INSERT, UPDATE, DELETE, REPLACE, CREATE, ALTER and DROP statements "
+                "against the selected database. It can permanently change or remove data and tables.\n\n"
+                "Fleasion will create and integrity-check a SQLite backup before every accepted write. "
+                "Writes to the Roblox cache are blocked while Roblox Player, Studio or Sober is detected.\n\n"
+                "Continue only if you understand the consequences.",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
+                QMessageBox.StandardButton.Cancel,
+            )
+            if answer != QMessageBox.StandardButton.Yes:
+                self.write_sql_check.blockSignals(True)
+                self.write_sql_check.setChecked(False)
+                self.write_sql_check.blockSignals(False)
+                self.query_status.setText("SQL console is read-only.")
+                return
+            self.query_status.setText("Write mode is enabled. Each accepted write gets a verified backup.")
+        else:
+            self.query_status.setText("SQL console is read-only.")
+
     def _run_query(self) -> None:
         if self.browser is None:
             self.query_status.setText("Open a database first.")
             return
+        if self.write_sql_check.isChecked():
+            try:
+                result = self.browser.execute_write(self.sql_edit.toPlainText())
+            except SQLiteBrowserError as exc:
+                self.query_status.setText(str(exc))
+                return
+            self._load_database(self.browser.path)
+            self.query_status.setText(
+                f"SQL write committed; affected rows: {result.affected_rows}. "
+                f"Backup: {result.backup_path}"
+            )
+            return
+
         try:
             result = self.browser.execute_select(self.sql_edit.toPlainText(), MAX_QUERY_ROWS)
         except SQLiteBrowserError as exc:
