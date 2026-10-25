@@ -381,9 +381,7 @@ class RobloxCacheStore:
                 size = path.stat().st_size
                 if size > MAX_ENTRY_READ_BYTES:
                     raise RobloxCacheError(f'Source entry exceeds the {MAX_ENTRY_READ_BYTES:,}-byte safety limit.')
-                data = path.read_bytes()
-                if source_id not in {path.name for path in ()}:  # keep source identity explicit for diagnostics
-                    return data
+                return path.read_bytes()
         raise RobloxCacheError('Source entry is not in the cache or the Fleasion local library.')
 
     def swap(self, target_id: str, source_id: str, *, origin: str = '') -> str:
@@ -402,19 +400,20 @@ class RobloxCacheStore:
         if current_db_size is None:
             raise RobloxCacheError('Target has no corresponding row in rbx-storage.db.')
         new_data = self._source_bytes(source_id)
-        old_data = target_path.read_bytes()
-        if len(old_data) > MAX_ENTRY_READ_BYTES:
+        if target_path.stat().st_size > MAX_ENTRY_READ_BYTES:
             raise RobloxCacheError('Target entry exceeds the configured safety limit.')
+        old_data = target_path.read_bytes()
 
         status = self.swap_status(target_id)
         if self.swap_status(source_id) == 'swapped':
             raise RobloxCacheError('Source is currently swapped itself. Restore its original entry first.')
 
         backup_path = self._backup_database()
+        old_manifest = self._manifest()
         if status != 'swapped':
             self._backup_original(target_id, old_data)
 
-        if source_id != target_id and (self._entry_path(source_id).is_file()):
+        if source_id != target_id and self._entry_path(source_id).is_file():
             self.library_dir.mkdir(parents=True, exist_ok=True)
             library_copy = self.library_dir / source_id
             if not library_copy.exists():
@@ -443,6 +442,8 @@ class RobloxCacheStore:
                     self._atomic_replace(target_path, old_data)
             with contextlib.suppress(Exception):
                 self._update_database_size(target_id, current_db_size)
+            with contextlib.suppress(Exception):
+                self._save_json(self.manifest_path, old_manifest)
             if isinstance(exc, RobloxCacheError):
                 raise
             raise RobloxCacheError(
