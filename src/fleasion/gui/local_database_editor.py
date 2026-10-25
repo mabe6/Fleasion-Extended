@@ -2,17 +2,14 @@
 
 from __future__ import annotations
 
-import contextlib
 import os
 import sqlite3
 from pathlib import Path
 from typing import Any
 
 from PyQt6.QtCore import Qt
-from PyQt6.QtGui import QAction
 from PyQt6.QtWidgets import (
     QAbstractItemView,
-    QCheckBox,
     QComboBox,
     QDialog,
     QFileDialog,
@@ -472,10 +469,10 @@ class LocalDatabaseEditorDialog(QDialog):
                 "the FleasionNT/DatabaseBackups folder. Editing the Roblox cache is blocked while "
                 "Roblox Player, Studio, or Sober is detected running.\n\n"
                 "Only enable editing when you understand the consequences.",
-                QMessageBox.StandardButton.Enable | QMessageBox.StandardButton.Cancel,
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
                 QMessageBox.StandardButton.Cancel,
             )
-            if result != QMessageBox.StandardButton.Enable:
+            if result != QMessageBox.StandardButton.Yes:
                 self.edit_button.blockSignals(True)
                 self.edit_button.setChecked(False)
                 self.edit_button.blockSignals(False)
