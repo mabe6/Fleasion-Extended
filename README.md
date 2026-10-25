@@ -45,8 +45,19 @@ For development, use Python 3.14 and the project's `uv` setup described in [CONT
 
 The fork defaults to proxy interception **off**, and automatic cache deletion on launch/exit is **off**. On the first launch after the local-database-mode migration is added, existing settings are migrated to those safer defaults. You can re-enable optional proxy features in Settings, but that does not make a patched proxy work.
 
+## Cache Slots: direct file-backed replacement
+
+The **Cache Slots** dashboard tab works with Roblox's local `rbx-storage.db` and `rbx-storage/` directory. It is designed for local cache work without sending asset replacement rules through the network proxy.
+
+1. Scan the Roblox cache root.
+2. Select a cache entry and set it as the target. Select a second entry as the source, or use **Import file → target** for a raw asset payload such as RBXM, PNG, mesh, audio or font.
+3. Confirm the operation. Fleasion saves the original target file, makes and verifies a SQLite backup, atomically replaces the whole cache entry, then updates the corresponding `files.size` row.
+4. Use **Restore target** or **Restore ALL** to revert entries saved in the swap manifest. **Export entry** saves raw bytes plus a diagnostic report, and **Probe header** reports whether the RBXH payload-length fields can be proven from real samples.
+
+External payload import is refused when Fleasion cannot confirm the cache header's payload-length field positions from enough existing entries. A full RBXH-wrapped cache entry is not accepted as a raw payload; select that entry as a source instead. The cache writer blocks changes while Roblox Player, Studio or Sober is detected running.
+
 > [!WARNING]
-> Editing a Roblox cache database is unsupported by Roblox and can make cached assets inconsistent. Close Roblox Player, Studio and Sober before writing to its cache. The editor blocks detected client processes, but always test on a copy and keep backups. Editing SQL rows does not automatically update the corresponding files in the cache directory; the dedicated CacheSwap entry-swap integration is still experimental.
+> Editing a Roblox cache database is unsupported by Roblox and can make cached assets inconsistent. Close Roblox Player, Studio and Sober before writing to its cache. The editor blocks detected client processes, but always test on a copy and keep backups. Editing arbitrary SQL rows does not automatically update related payload files. Use Cache Slots for supported whole-entry replacements so the file and its `files.size` metadata are updated together.
 
 <details>
 <summary><b>System tray</b></summary>
