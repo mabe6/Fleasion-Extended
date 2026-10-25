@@ -412,11 +412,29 @@ class SQLiteBrowser:
                 connection.execute("PRAGMA busy_timeout = 5000")
                 connection.execute("BEGIN IMMEDIATE")
                 where = " AND ".join(f"{quote_identifier(name)} IS ?" for name in key_columns)
-                cursor = connection.execute(
-                    f"UPDATE {quote_identifier(table)} "
-                    f"SET {quote_identifier(column)} = ? WHERE {where}",
-                    (value, *key_values),
+                size_column = next(
+                    (name for name in valid_columns if name.casefold() == "size"), None
                 )
+                if (
+                    table.casefold() == "files"
+                    and column.casefold() == "content"
+                    and size_column is not None
+                    and (value is None or isinstance(value, (bytes, bytearray, memoryview)))
+                ):
+                    blob_value = None if value is None else sqlite3.Binary(bytes(value))
+                    blob_size = 0 if blob_value is None else len(blob_value)
+                    cursor = connection.execute(
+                        f"UPDATE {quote_identifier(table)} "
+                        f"SET {quote_identifier(column)} = ?, {quote_identifier(size_column)} = ? "
+                        f"WHERE {where}",
+                        (blob_value, blob_size, *key_values),
+                    )
+                else:
+                    cursor = connection.execute(
+                        f"UPDATE {quote_identifier(table)} "
+                        f"SET {quote_identifier(column)} = ? WHERE {where}",
+                        (value, *key_values),
+                    )
                 if cursor.rowcount != 1:
                     connection.rollback()
                     raise SQLiteBrowserError(
