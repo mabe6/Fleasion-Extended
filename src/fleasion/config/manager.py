@@ -260,9 +260,9 @@ DEFAULT_SETTINGS = {
     'always_on_top': False,
     'open_dashboard_on_launch': True,
     'first_time_setup_complete': False,
-    'auto_delete_cache_on_exit': True,
-    'clear_cache_on_launch': True,
-    'proxy_features_enabled': True,
+    'auto_delete_cache_on_exit': False,
+    'clear_cache_on_launch': False,
+    'proxy_features_enabled': False,
     'proxy_mode': 'env',
     # Linux client selection is registry-backed. Sober is the only registered
     # implementation today; ``auto`` leaves room for future backends.
@@ -873,7 +873,7 @@ class ConfigManager:
     @property
     def proxy_features_enabled(self) -> bool:
         """Get proxy feature toggle."""
-        return self.settings.get('proxy_features_enabled', True)
+        return self.settings.get('proxy_features_enabled', False)
 
     @proxy_features_enabled.setter
     def proxy_features_enabled(self, value: bool):
