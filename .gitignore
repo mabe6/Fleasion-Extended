@@ -253,9 +253,12 @@ desktop.ini
 *.local
 .env.*
 
-# Roblox local databases and live SQLite sidecars must never be committed
+# Roblox local cache data (database, WAL, SHM index, identifier and payload files)
 *.db
 *.db-shm
 *.db-wal
 *.sqlite
 *.sqlite3
+/rbx-storage.id
+/rbx-storage/
+/rbx-storage-sc/
