@@ -52,5 +52,19 @@ jobs:
       - name: Install project and test dependencies
         run: uv sync --locked --group dev
 
+      - name: Compile modified Python modules
+        run: >-
+          uv run python -m py_compile
+          src/fleasion/database/__init__.py
+          src/fleasion/database/sqlite_browser.py
+          src/fleasion/local_database_mode.py
+          src/fleasion/gui/local_database_editor.py
+          src/fleasion/gui/replacer_config.py
+          src/fleasion/tray.py
+          src/fleasion/app.py
+          src/fleasion/config/manager.py
+          tests/test_sqlite_browser.py
+          tests/test_local_database_mode.py
+
       - name: Run local database tests
         run: uv run pytest -q tests/test_sqlite_browser.py tests/test_local_database_mode.py
