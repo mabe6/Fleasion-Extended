@@ -294,55 +294,96 @@ class RobloxCacheStore:
         self._save_json(self.history_path, records[-1000:])
 
     def swap_status(self, entry_id: str) -> str:
-        """Return empty, swapped or reverted based on the manifest and current file size."""
+        """Return empty, swapped or reverted using a content hash where available."""
         record = self._manifest().get(entry_id)
         if not record:
             return ''
         try:
-            current_size = self._entry_path(entry_id).stat().st_size
-        except OSError:
+            data, _mode = self._get_entry_data(entry_id)
+        except RobloxCacheError:
             return 'reverted'
-        return 'swapped' if current_size == record.get('swapped_size') else 'reverted'
+        expected_hash = record.get('swapped_sha256')
+        if expected_hash:
+            return 'swapped' if hashlib.sha256(data).hexdigest() == expected_hash else 'reverted'
+        return 'swapped' if len(data) == record.get('swapped_size') else 'reverted'
 
     def scan(self, *, limit: int = 100_000) -> list[RobloxCacheEntry]:
-        """Scan physical cache files and join them with rows from the files table."""
+        """Scan database BLOBs first, then include legacy file-backed cache entries."""
         self.validate()
-        sizes = self._read_database_sizes()
+        records = self._read_database_records()
         manifest = self._manifest()
         results: list[RobloxCacheEntry] = []
-        for directory, dirnames, filenames in os.walk(self.assets_path, followlinks=False):
-            dirnames.sort()
-            for filename in filenames:
-                if HEX32.fullmatch(filename) is None:
-                    continue
-                path = Path(directory) / filename
-                try:
-                    stat_result = path.stat()
-                    with path.open('rb') as handle:
-                        head = handle.read(ENTRY_HEAD_READ)
-                    url, payload, has_header = split_rbxh_entry(head)
-                    kind = detect_roblox_payload_kind(payload)
-                except OSError:
-                    continue
-                record = manifest.get(filename, {})
-                swapped_size = record.get('swapped_size')
-                status = ''
-                if record:
-                    status = 'swapped' if stat_result.st_size == swapped_size else 'reverted'
-                results.append(RobloxCacheEntry(
-                    entry_id=filename,
-                    file_size=stat_result.st_size,
-                    database_size=sizes.get(filename),
-                    modified_at=stat_result.st_mtime,
-                    kind=kind,
-                    url=url,
-                    asset_id=_asset_id_from_url(url),
-                    has_rbxh_header=has_header,
-                    swap_status=status,
-                ))
+        seen: set[str] = set()
+
+        def add_entry(entry_id: str, data: bytes, storage_mode: str,
+                      database_size: int | None, modified_at: float) -> None:
+            if entry_id in seen:
+                return
+            seen.add(entry_id)
+            head = data[:ENTRY_HEAD_READ]
+            url, payload, has_header = split_rbxh_entry(head)
+            swap_record = manifest.get(entry_id, {})
+            status = ''
+            if swap_record:
+                expected_hash = swap_record.get('swapped_sha256')
+                if expected_hash:
+                    status = 'swapped' if hashlib.sha256(data).hexdigest() == expected_hash else 'reverted'
+                else:
+                    status = 'swapped' if len(data) == swap_record.get('swapped_size') else 'reverted'
+            results.append(RobloxCacheEntry(
+                entry_id=entry_id,
+                file_size=len(data),
+                database_size=database_size,
+                modified_at=modified_at,
+                kind=detect_roblox_payload_kind(payload),
+                url=url,
+                asset_id=_asset_id_from_url(url),
+                has_rbxh_header=has_header,
+                swap_status=status,
+                storage_mode=storage_mode,
+            ))
+
+        for entry_id, record in records.items():
+            try:
+                data, storage_mode = self._get_entry_data(entry_id, records)
+            except RobloxCacheError:
+                # Empty content rows with no physical entry are metadata-only, not swappable assets.
+                continue
+            path = self._entry_path(entry_id)
+            try:
+                modified_at = path.stat().st_mtime if path.is_file() else 0.0
+            except OSError:
+                modified_at = 0.0
+            if modified_at <= 0:
+                atime = record.get('atime') or 0
+                if isinstance(atime, (int, float)) and atime > 0:
+                    modified_at = float(atime / 1000 if atime > 10_000_000_000 else atime)
+            add_entry(entry_id, data, storage_mode, record.get('size'), modified_at)
+            if len(results) >= limit:
+                break
+
+        # Some older cache versions store payloads as separate files and leave content NULL.
+        # Also retain orphan files so the UI can diagnose rows whose DB metadata is missing.
+        if len(results) < limit and self.assets_path.is_dir():
+            for directory, dirnames, filenames in os.walk(self.assets_path, followlinks=False):
+                dirnames.sort()
+                for filename in filenames:
+                    if HEX32.fullmatch(filename) is None or filename in seen:
+                        continue
+                    path = Path(directory) / filename
+                    try:
+                        stat_result = path.stat()
+                        if stat_result.st_size > MAX_ENTRY_READ_BYTES:
+                            continue
+                        data = path.read_bytes()
+                    except OSError:
+                        continue
+                    add_entry(filename, data, 'file', records.get(filename, {}).get('size'), stat_result.st_mtime)
+                    if len(results) >= limit:
+                        break
                 if len(results) >= limit:
-                    results.sort(key=lambda item: (-item.modified_at, item.entry_id))
-                    return results
+                    break
+
         results.sort(key=lambda item: (-item.modified_at, item.entry_id))
         return results
 
@@ -369,7 +410,7 @@ class RobloxCacheStore:
         *,
         expected_old_size: int | None = None,
     ) -> None:
-        """Update exactly one files.size value and reject a stale row snapshot."""
+        """Update exactly one files.size cell for legacy file-backed entries."""
         self._validate_entry_id(entry_id)
         try:
             with contextlib.closing(sqlite3.connect(self.database_path, timeout=5)) as connection:
@@ -398,6 +439,49 @@ class RobloxCacheStore:
             raise
         except sqlite3.Error as exc:
             raise RobloxCacheError(f'Could not update files.size for {entry_id}:\n{exc}') from exc
+
+    def _update_database_blob(
+        self,
+        entry_id: str,
+        new_data: bytes,
+        *,
+        expected_old_size: int,
+        expected_old_data: bytes,
+    ) -> None:
+        """Atomically update content and size in the same files row."""
+        self._validate_entry_id(entry_id)
+        try:
+            with contextlib.closing(sqlite3.connect(self.database_path, timeout=5)) as connection:
+                connection.execute('PRAGMA busy_timeout = 5000')
+                connection.execute('BEGIN IMMEDIATE')
+                row = connection.execute(
+                    'SELECT size, content FROM files WHERE id = ?',
+                    (bytes.fromhex(entry_id),),
+                ).fetchone()
+                if row is None:
+                    raise RobloxCacheError(f'Entry {entry_id} has no row in the files table.')
+                old_size, old_data = row
+                if old_size != expected_old_size:
+                    raise RobloxCacheError(
+                        f'Database size for {entry_id} changed; refresh and retry before writing.'
+                    )
+                if old_data is None or bytes(old_data) != expected_old_data:
+                    raise RobloxCacheError(
+                        f'Database content for {entry_id} changed; refresh and retry before writing.'
+                    )
+                cursor = connection.execute(
+                    'UPDATE files SET content = ?, size = ? WHERE id = ?',
+                    (sqlite3.Binary(new_data), len(new_data), bytes.fromhex(entry_id)),
+                )
+                if cursor.rowcount != 1:
+                    raise RobloxCacheError(
+                        f'Expected to update one content row for {entry_id}, updated {cursor.rowcount}.'
+                    )
+                connection.commit()
+        except RobloxCacheError:
+            raise
+        except sqlite3.Error as exc:
+            raise RobloxCacheError(f'Could not update files.content for {entry_id}:\n{exc}') from exc
 
     def _atomic_replace(self, path: Path, data: bytes) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
