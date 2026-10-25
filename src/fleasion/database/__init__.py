@@ -6,6 +6,7 @@ from .sqlite_browser import (
     SQLiteBrowserError,
     TableInfo,
     TablePage,
+    WriteResult,
     discover_databases,
     is_sqlite_file,
 )
@@ -16,6 +17,7 @@ __all__ = [
     "SQLiteBrowserError",
     "TableInfo",
     "TablePage",
+    "WriteResult",
     "discover_databases",
     "is_sqlite_file",
 ]
