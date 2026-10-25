@@ -45,16 +45,29 @@ For development, use Python 3.14 and the project's `uv` setup described in [CONT
 
 The fork defaults to proxy interception **off**, and automatic cache deletion on launch/exit is **off**. On the first launch after the local-database-mode migration is added, existing settings are migrated to those safer defaults. You can re-enable optional proxy features in Settings, but that does not make a patched proxy work.
 
-## Cache Slots: direct file-backed replacement
+### Where to get a real test cache
 
-The **Cache Slots** dashboard tab works with Roblox's local `rbx-storage.db` and `rbx-storage/` directory. It is designed for local cache work without sending asset replacement rules through the network proxy.
+On Windows, press **Win+R** and enter `%LOCALAPPDATA%\Roblox`. This is the usual Roblox cache root. It can contain `rbx-storage.db`, the optional `rbx-storage.db-wal` and `rbx-storage.db-shm` sidecars, `rbx-storage.id`, and on some cache versions an `rbx-storage\` folder. Newer cache databases may keep the actual entry bytes directly in the `files.content` BLOB column, so the folder is not necessarily the only place where payloads live.
+
+**For your first test, make a copy before writing:**
+
+1. Completely exit Roblox Player and Studio (also check Task Manager for leftover Roblox processes). If using Sober, close that too.
+2. Copy the whole `%LOCALAPPDATA%\Roblox` folder to something like `%USERPROFILE%\Desktop\RobloxCacheTest`. Keep `rbx-storage.db` and any `-wal`/`-shm` sidecars together if they exist. Do not manually delete the WAL: it can contain committed transactions not yet checkpointed into the main database. SQLite's own backup API is preferred when making a standalone database copy.
+3. Open Fleasion-Extended → **Cache Slots**, set **Roblox cache root** to the copied `RobloxCacheTest` folder, then click **Scan cache**.
+4. Start with two entries of the same detected type. Swap source → target, verify the displayed file/content size and DB size, then click **Restore target**. Only try an import from a separate raw payload file after this basic round-trip succeeds.
+
+For a raw-payload import, use an asset file you own or exported from your own project—for example a model saved as `.rbxm`/`.rbxmx`, or a PNG, mesh, audio or font file. A cache export is a complete RBXH-wrapped entry, not a raw payload, and is intended for inspection rather than re-import through the raw-payload button.
+
+## Cache Slots: direct SQLite BLOB or file-backed replacement
+
+The **Cache Slots** dashboard tab works with Roblox's local `rbx-storage.db` and supports both entries stored in the `files.content` BLOB column and legacy entries stored as separate files under `rbx-storage/`. It operates locally and does not send replacement rules through the network proxy.
 
 1. Scan the Roblox cache root.
-2. Select a cache entry and set it as the target. Select a second entry as the source, or use **Import file → target** for a raw asset payload such as RBXM, PNG, mesh, audio or font.
-3. Confirm the operation. Fleasion saves the original target file, makes and verifies a SQLite backup, atomically replaces the whole cache entry, then updates the corresponding `files.size` row.
-4. Use **Restore target** or **Restore ALL** to revert entries saved in the swap manifest. **Export entry** saves raw bytes plus a diagnostic report, and **Probe header** reports whether the RBXH payload-length fields can be proven from real samples.
+2. Select a cache entry and set it as the target. Select a second entry as the source, or use **Import file → target** for a raw asset payload.
+3. Confirm the operation. For a BLOB-backed entry, Fleasion updates `files.content` and `files.size` in one SQLite transaction. For a file-backed entry, it replaces the physical file and updates its `files.size` metadata. Before either path it creates and integrity-checks a database backup and saves the original target bytes.
+4. Use **Restore target** or **Restore ALL** to revert entries saved in the swap manifest. **Export entry** saves the full cached bytes plus a diagnostic report, and **Probe header** reports whether RBXH payload-length fields can be proven from real samples.
 
-External payload import is refused when Fleasion cannot confirm the cache header's payload-length field positions from enough existing entries. A full RBXH-wrapped cache entry is not accepted as a raw payload; select that entry as a source instead. The cache writer blocks changes while Roblox Player, Studio or Sober is detected running.
+External payload import is refused when Fleasion cannot confirm the cache header's payload-length field positions from enough existing entries. A full RBXH-wrapped cache entry is not accepted as a raw payload; select the cache entry itself as the source instead. Writes are blocked when Roblox Player, Studio or Sober is detected running.
 
 > [!WARNING]
 > Editing a Roblox cache database is unsupported by Roblox and can make cached assets inconsistent. Close Roblox Player, Studio and Sober before writing to its cache. The editor blocks detected client processes, but always test on a copy and keep backups. Editing arbitrary SQL rows does not automatically update related payload files. Use Cache Slots for supported whole-entry replacements so the file and its `files.size` metadata are updated together.
