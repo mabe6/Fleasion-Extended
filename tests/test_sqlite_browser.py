@@ -170,6 +170,43 @@ def test_sql_write_is_blocked_for_running_roblox_cache(tmp_path, monkeypatch):
     assert not (tmp_path / "app-config" / "FleasionNT" / "DatabaseBackups").exists()
 
 
+def test_readonly_browser_and_backup_include_committed_wal_frames(tmp_path, monkeypatch):
+    path = tmp_path / "Roblox" / "rbx-storage.db"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(sqlite_browser_module, "CONFIG_DIR", tmp_path / "app-config")
+
+    writer = sqlite3.connect(path, timeout=5)
+    try:
+        assert writer.execute("PRAGMA journal_mode = WAL").fetchone()[0].lower() == "wal"
+        writer.execute("PRAGMA wal_autocheckpoint = 0")
+        writer.execute(
+            "CREATE TABLE files (id BLOB PRIMARY KEY, content BLOB, size INTEGER NOT NULL)"
+        )
+        ident = bytes.fromhex("cd" * 16)
+        payload = b"committed-in-wal-not-yet-checkpointed"
+        writer.execute(
+            "INSERT INTO files (id, content, size) VALUES (?, ?, ?)",
+            (ident, payload, len(payload)),
+        )
+        writer.commit()
+
+        wal_path = path.with_name(path.name + "-wal")
+        assert wal_path.is_file() and wal_path.stat().st_size > 0
+
+        browser = SQLiteBrowser(path)
+        page = browser.fetch_page("files")
+        assert page.rows == ((ident, payload, len(payload)),)
+
+        backup = browser.backup()
+        with sqlite3.connect(backup) as connection:
+            assert connection.execute(
+                "SELECT content, size FROM files WHERE id = ?", (ident,)
+            ).fetchone() == (payload, len(payload))
+            assert connection.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
+    finally:
+        writer.close()
+
+
 def test_replacing_files_content_blob_keeps_size_column_in_sync(tmp_path, monkeypatch):
     path = tmp_path / "Roblox" / "rbx-storage.db"
     path.parent.mkdir(parents=True, exist_ok=True)
