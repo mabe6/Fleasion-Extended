@@ -47,6 +47,112 @@ def _make_store(tmp_path: Path, monkeypatch, entries: dict[str, bytes]) -> Roblo
     return RobloxCacheStore(root)
 
 
+def _make_blob_store(tmp_path: Path, monkeypatch, entries: dict[str, bytes]) -> RobloxCacheStore:
+    root = tmp_path / "RobloxBlobCache"
+    root.mkdir(parents=True)
+    db_path = root / "rbx-storage.db"
+    with sqlite3.connect(db_path) as connection:
+        connection.execute(
+            "CREATE TABLE files (id BLOB PRIMARY KEY NOT NULL, content BLOB, "
+            "size INTEGER DEFAULT 0 NOT NULL, hits INTEGER DEFAULT 0 NOT NULL, "
+            "atime INTEGER DEFAULT 0 NOT NULL, category INTEGER DEFAULT 0 NOT NULL, "
+            "score INTEGER DEFAULT 0 NOT NULL, ttl INTEGER DEFAULT 0 NOT NULL)"
+        )
+        for entry_id, data in entries.items():
+            connection.execute(
+                "INSERT INTO files (id, content, size, atime) VALUES (?, ?, ?, ?)",
+                (bytes.fromhex(entry_id), data, len(data), 1_792_965_842_000),
+            )
+
+    config_dir = tmp_path / "blob-app-config"
+    monkeypatch.setattr(store_module, "CONFIG_DIR", config_dir)
+    monkeypatch.setattr(sqlite_browser_module, "CONFIG_DIR", config_dir)
+    monkeypatch.setattr(store_module, "_is_roblox_process_running", lambda: False)
+    # Intentionally do not create an rbx-storage/ directory: these entries live in SQLite BLOBs.
+    return RobloxCacheStore(root)
+
+
+def test_blob_cache_scans_database_content_without_external_folder(tmp_path, monkeypatch):
+    target_id = "a" * 32
+    source_id = "b" * 32
+    entries = {
+        target_id: _make_entry(
+            "https://assetdelivery.roblox.com/v1/asset?id=12345",
+            b"target-payload-" + b"T" * 340,
+        ),
+        source_id: _make_entry(
+            "https://assetdelivery.roblox.com/v1/asset?id=98765",
+            b"source-payload-" + b"S" * 410,
+        ),
+    }
+    store = _make_blob_store(tmp_path, monkeypatch, entries)
+
+    found = {item.entry_id: item for item in store.scan()}
+
+    assert set(found) == {target_id, source_id}
+    assert found[target_id].storage_mode == "database"
+    assert found[target_id].has_rbxh_header is True
+    assert found[target_id].asset_id == "12345"
+    assert found[target_id].file_size == found[target_id].database_size == len(entries[target_id])
+    assert found[source_id].storage_mode == "database"
+
+
+def test_blob_cache_swap_and_restore_update_content_and_size_atomically(tmp_path, monkeypatch):
+    target_id = "a" * 32
+    source_id = "b" * 32
+    target_data = _make_entry("https://example.test/?id=111", b"T" * 350)
+    source_data = _make_entry("https://example.test/?id=222", b"S" * 420)
+    store = _make_blob_store(tmp_path, monkeypatch, {
+        target_id: target_data,
+        source_id: source_data,
+    })
+
+    message = store.swap(target_id, source_id, origin="blob fixture")
+
+    assert "database" in message
+    assert store._get_entry_data(target_id)[0] == source_data
+    assert store.database_size(target_id) == len(source_data)
+    assert (store.originals_dir / target_id).read_bytes() == target_data
+    assert store.swap_status(target_id) == "swapped"
+    with sqlite3.connect(store.database_path) as connection:
+        row = connection.execute(
+            "SELECT content, size FROM files WHERE id = ?", (bytes.fromhex(target_id),)
+        ).fetchone()
+        assert row == (source_data, len(source_data))
+
+    message = store.restore(target_id)
+
+    assert "Restored" in message
+    assert store._get_entry_data(target_id)[0] == target_data
+    assert store.database_size(target_id) == len(target_data)
+    assert store.swap_status(target_id) == ""
+    assert target_id not in store._manifest()
+
+
+def test_blob_cache_import_wraps_payload_and_updates_db_content(tmp_path, monkeypatch):
+    target_id = "a" * 32
+    entries = {
+        target_id: _make_entry("https://example.test/?id=111", b"T" * 350),
+        "b" * 32: _make_entry("https://example.test/?id=222", b"B" * 360),
+        "c" * 32: _make_entry("https://example.test/?id=333", b"C" * 370),
+    }
+    store = _make_blob_store(tmp_path, monkeypatch, entries)
+    payload_path = tmp_path / "custom-animation.rbxm"
+    payload = b"<roblox!" + b"custom CurveAnimation payload" * 12
+    payload_path.write_bytes(payload)
+
+    message = store.import_file(target_id, payload_path, origin="blob import fixture")
+    wrapped = store._get_entry_data(target_id)[0]
+    url, recovered_payload, has_header = split_rbxh_entry(wrapped)
+
+    assert "database" in message
+    assert has_header is True
+    assert url == "https://example.test/?id=111"
+    assert recovered_payload == payload
+    assert store.database_size(target_id) == len(wrapped)
+    assert store.swap_status(target_id) == "swapped"
+
+
 def test_scan_joins_physical_entries_with_sqlite_metadata(tmp_path, monkeypatch):
     target_id = "a" * 32
     source_id = "b" * 32
