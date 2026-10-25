@@ -2,7 +2,7 @@
 
 from types import SimpleNamespace
 
-from fleasion.app import _migrate_local_database_mode
+from fleasion.local_database_mode import migrate_local_database_mode as _migrate_local_database_mode
 from fleasion.config.manager import DEFAULT_SETTINGS
 
 
