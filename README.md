@@ -133,6 +133,19 @@ Client paths, launch behavior, process detection and proxy support all go throug
 >
 > **Roblox rules:** asset replacement happens on your client, so only you see the changes. There are no known detections or reported bans for local asset replacement at the time of writing, but Roblox does not allow these modifications and game moderators may still take action. Use your own judgment.
 
+## Local SQLite database editor (CacheSwap branch)
+
+The CacheSwap branch adds **Local SQLite DB Editor…** to the existing Fleasion system-tray menu. It is an experimental local database browser/editor, not another proxy implementation.
+
+- Open one `.db`, `.sqlite`, `.sqlite3` or `.db3` file directly, or scan a chosen folder for SQLite files.
+- Inspect table/view names, column schemas, CREATE statements and paginated rows.
+- Run bounded read-only `SELECT`, `WITH` and `EXPLAIN` queries (maximum 500 result rows, with a time limit).
+- Browse in read-only mode by default. After explicitly enabling editing, change individual cells or export/replace BLOB values.
+- Every cell write creates and integrity-checks a backup using SQLite's backup API under `FleasionNT/DatabaseBackups`.
+- Writes to the Roblox cache database are blocked when Roblox Player, Studio or Sober is detected running. Close the client before editing its cache.
+
+**Important limits:** this feature edits SQLite rows directly; it does not automatically rewrite related cache payload files or guarantee that Roblox will accept a changed cache entry. Use a backup and test on a copy first. If a database is locked, encrypted, non-SQLite, or uses an unsupported schema, the editor may not be able to open or safely edit it. The SQL console is intentionally read-only; modifications go through the backed-up cell editor.
+
 ## Features
 
 <details>
