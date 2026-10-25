@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 from ..utils.paths import CONFIG_DIR, CONFIG_FILE, CONFIGS_FOLDER
+from ..local_database_mode import DEFAULT_DATABASE_MODE_SETTINGS
 
 # Windows forbids these characters in file and folder names.
 _INVALID_FILENAME_CHARS = frozenset('\\/:*?"<>|')
@@ -260,9 +261,7 @@ DEFAULT_SETTINGS = {
     'always_on_top': False,
     'open_dashboard_on_launch': True,
     'first_time_setup_complete': False,
-    'auto_delete_cache_on_exit': False,
-    'clear_cache_on_launch': False,
-    'proxy_features_enabled': False,
+    **DEFAULT_DATABASE_MODE_SETTINGS,
     'proxy_mode': 'env',
     # Linux client selection is registry-backed. Sober is the only registered
     # implementation today; ``auto`` leaves room for future backends.
