@@ -585,6 +585,11 @@ class RobloxCacheStore:
         if path.stat().st_size > MAX_IMPORT_BYTES:
             raise RobloxCacheError(f'Import file exceeds the {MAX_IMPORT_BYTES:,}-byte limit.')
         payload = path.read_bytes()
+        if payload.startswith(b'RBXH'):
+            raise RobloxCacheError(
+                'The selected file appears to be a complete RBXH cache entry, not a raw asset payload. '
+                'Choose an asset file such as RBXM, PNG, mesh or audio, or select the source entry in Cache Slots.'
+            )
         target_path = self._entry_path(target_id)
         if not target_path.is_file():
             raise RobloxCacheError('The target entry file is not in the local cache.')
