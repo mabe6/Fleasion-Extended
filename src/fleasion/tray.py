@@ -320,6 +320,13 @@ class SystemTray:
         cache_action.triggered.connect(self._show_delete_cache)
         self.menu.addAction(cache_action)
 
+        database_editor_action = QAction('Local SQLite DB Editor…', self.menu)
+        database_editor_action.setToolTip(
+            'Browse local .db files, inspect tables and rows, and edit cells with backups'
+        )
+        database_editor_action.triggered.connect(self._show_local_database_editor)
+        self.menu.addAction(database_editor_action)
+
         logs_action = QAction(tr('ui.tray.logs'), self.menu)
         logs_action.triggered.connect(self._show_logs)
         self.menu.addAction(logs_action)
@@ -1074,6 +1081,29 @@ class SystemTray:
             if sys.platform == 'darwin':
                 return
             self._toggle_dashboard()
+
+    def _show_local_database_editor(self):
+        """Open the local SQLite browser/editor inside Fleasion's existing GUI."""
+        from .gui.local_database_editor import LocalDatabaseEditorDialog
+
+        for window in self.open_windows:
+            if isinstance(window, LocalDatabaseEditorDialog):
+                window.showNormal()
+                window.show()
+                window.raise_()
+                window.activateWindow()
+                return
+
+        window = LocalDatabaseEditorDialog()
+        window.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
+        window.destroyed.connect(
+            lambda _obj=None, _self=self, _window=window: _self._remove_window(_window)
+        )
+        self.open_windows.append(window)
+        self._apply_always_on_top_to_window(window)
+        window.show()
+        window.raise_()
+        window.activateWindow()
 
     def _show_delete_cache(self):
         """Show Delete Cache window."""
