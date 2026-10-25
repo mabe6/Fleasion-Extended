@@ -189,6 +189,23 @@ class _ForcedAcknowledgeMessageBox(QMessageBox):
             event.ignore()
 
 
+def _migrate_local_database_mode(config_manager: ConfigManager) -> bool:
+    """Disable proxy interception and automatic cache deletion once in this fork."""
+    if config_manager.settings.get('local_database_mode_migration_v1_complete', False):
+        return False
+
+    config_manager.proxy_features_enabled = False
+    config_manager.clear_cache_on_launch = False
+    config_manager.auto_delete_cache_on_exit = False
+    config_manager.settings['local_database_mode_migration_v1_complete'] = True
+    config_manager._save_settings()
+    log_buffer.log(
+        'App',
+        'Enabled local database mode by default; proxy and automatic Roblox cache deletion are off',
+    )
+    return True
+
+
 def _prepare_env_proxy_migration(config_manager: ConfigManager) -> bool:
     """Select Env Proxy before privilege gates and report a legacy migration."""
     if not config_manager.proxy_features_enabled:
@@ -4353,21 +4370,7 @@ def main():
     # Initialize config manager before the elevation gate so the non-elevated
     # process can still build the prompt UI and show a fallback dialog.
     config_manager = ConfigManager()
-
-    # This fork defaults to direct local SQLite editing, not network interception.
-    # Migrate existing settings once so an older Fleasion config cannot start the proxy
-    # or automatically delete the cache database the user intends to inspect.
-    if not config_manager.settings.get('local_database_mode_migration_v1_complete', False):
-        config_manager.proxy_features_enabled = False
-        config_manager.clear_cache_on_launch = False
-        config_manager.auto_delete_cache_on_exit = False
-        config_manager.settings['local_database_mode_migration_v1_complete'] = True
-        config_manager._save_settings()
-        log_buffer.log(
-            'App',
-            'Enabled local database mode by default; proxy and automatic Roblox cache deletion are off',
-        )
-
+    _migrate_local_database_mode(config_manager)
     set_language(config_manager.language)
     if not _suppress_dashboard and not config_manager.first_time_setup_complete:
         _prompt_first_time_language(config_manager)
