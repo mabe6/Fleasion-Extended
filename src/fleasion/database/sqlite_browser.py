@@ -276,6 +276,11 @@ class SQLiteBrowser:
             raise SQLiteBrowserError("Only SELECT, WITH (read-only) and EXPLAIN queries are allowed here.")
         try:
             with contextlib.closing(self.connect_readonly()) as connection:
+                deadline = time.monotonic() + 3.0
+                connection.set_progress_handler(
+                    lambda: 1 if time.monotonic() > deadline else 0,
+                    10_000,
+                )
                 cursor = connection.execute(normalized)
                 if cursor.description is None:
                     raise SQLiteBrowserError("The query did not return a result set.")
@@ -305,7 +310,7 @@ class SQLiteBrowser:
                         raise SQLiteBrowserError(
                             f"Backup integrity check failed: {check[0] if check else 'no result'}"
                         )
-        except (sqlite3.Error, OSError) as exc:
+        except (SQLiteBrowserError, sqlite3.Error, OSError) as exc:
             with contextlib.suppress(OSError):
                 destination.unlink()
             if isinstance(exc, SQLiteBrowserError):
