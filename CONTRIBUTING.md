@@ -11,8 +11,8 @@ Thanks for contributing to Fleasion. This document covers the development enviro
 ## Running from Source
 
 ```bash
-git clone https://github.com/fleasion/Fleasion.git
-cd Fleasion
+git clone --branch CacheSwap https://github.com/mabe6/Fleasion-Extended.git
+cd Fleasion-Extended
 uv run fleasion
 ```
 
