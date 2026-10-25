@@ -8,6 +8,7 @@ on:
       - ".github/workflows/local-db-tests.yml"
       - "src/fleasion/database/**"
       - "src/fleasion/gui/local_database_editor.py"
+      - "src/fleasion/gui/roblox_cache_tab.py"
       - "src/fleasion/gui/replacer_config.py"
       - "src/fleasion/tray.py"
       - "src/fleasion/app.py"
@@ -58,8 +59,10 @@ jobs:
           uv run python -m py_compile
           src/fleasion/database/__init__.py
           src/fleasion/database/sqlite_browser.py
+          src/fleasion/database/roblox_cache_store.py
           src/fleasion/local_database_mode.py
           src/fleasion/gui/local_database_editor.py
+          src/fleasion/gui/roblox_cache_tab.py
           src/fleasion/gui/replacer_config.py
           src/fleasion/tray.py
           src/fleasion/app.py
