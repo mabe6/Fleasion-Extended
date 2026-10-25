@@ -1,5 +1,6 @@
 """SQLite database inspection and guarded editing tools for Fleasion."""
 
+from .roblox_cache_store import RobloxCacheEntry, RobloxCacheError, RobloxCacheStore
 from .sqlite_browser import (
     QueryResult,
     SQLiteBrowser,
@@ -13,6 +14,9 @@ from .sqlite_browser import (
 
 __all__ = [
     "QueryResult",
+    "RobloxCacheEntry",
+    "RobloxCacheError",
+    "RobloxCacheStore",
     "SQLiteBrowser",
     "SQLiteBrowserError",
     "TableInfo",
