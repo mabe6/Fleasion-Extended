@@ -74,9 +74,9 @@ Env Proxy launches at boot never ask for administrator access. In Hosts File mod
 
 </details>
 
-## How it works
+## Optional legacy proxy functionality
 
-Fleasion runs a lightweight HTTPS proxy on your machine and supports two routing modes. When Roblox requests assets, Fleasion can:
+The upstream Fleasion architecture uses a lightweight HTTPS proxy with two routing modes. This code is retained for compatibility, but proxy interception is disabled by default in Fleasion-Extended and may not currently work with Roblox. Treat these details as architecture documentation, not a claim that proxy replacement is operational. When the proxy is functioning and explicitly enabled, it can:
 
 - **Replace** assets by ID, swapping one texture, sound or model for another.
 - **Remove** assets, such as stripping textures from a request entirely.
@@ -88,7 +88,7 @@ Everything happens locally on your machine.
 <details>
 <summary><b>Proxy modes</b></summary>
 
-- **Roblox Env Proxy** (default) listens on the loopback port `58443` and relaunches Roblox Player with proxy environment variables. If Windows has reserved that port, Fleasion picks another free loopback port automatically. This mode does not change your hosts file or use port 443. Roblox Player's `ssl/cacert.pem` still receives Fleasion's local CA so the Player trusts the intercepted traffic.
+- **Roblox Env Proxy** (optional; disabled by default in this fork) listens on the loopback port `58443` and relaunches Roblox Player with proxy environment variables. If Windows has reserved that port, Fleasion picks another free loopback port automatically. This mode does not change your hosts file or use port 443. Roblox Player's `ssl/cacert.pem` still receives Fleasion's local CA so the Player trusts the intercepted traffic.
   - Microsoft Store and Xbox (GDK) Roblox is started through package aware activation with a scoped environment. If that is not available, Fleasion leaves the client alone and reports it instead of relaunching it.
   - Roblox Studio is never relaunched, intercepted, patched or closed in this mode.
 - **Hosts File** is the older compatibility mode. It points the intercepted Roblox hosts to localhost and uses port 443, so it still needs administrator access or the platform helper.
