@@ -42,6 +42,7 @@ class RobloxCacheEntry:
     asset_id: str
     has_rbxh_header: bool
     swap_status: str = ''
+    storage_mode: str = 'file'
 
 
 def default_roblox_cache_root() -> Path:
@@ -173,9 +174,7 @@ class RobloxCacheStore:
             raise RobloxCacheError('Cache entry IDs must be 32 lowercase hexadecimal characters.')
 
     def validate(self) -> None:
-        """Validate the expected directory layout and SQLite schema without writing."""
-        if not self.assets_path.is_dir():
-            raise RobloxCacheError(f'Roblox cache folder not found:\n{self.assets_path}')
+        """Validate the cache database and accept either BLOB-backed or file-backed entries."""
         if not self.database_path.is_file():
             raise RobloxCacheError(f'Roblox cache database not found:\n{self.database_path}')
         try:
@@ -188,30 +187,79 @@ class RobloxCacheStore:
             column_names = {str(column['name']) for column in columns}
             if not {'id', 'size'}.issubset(column_names):
                 raise RobloxCacheError("The 'files' table does not have the expected id and size columns.")
+            if 'content' not in column_names and not self.assets_path.is_dir():
+                raise RobloxCacheError(
+                    "This database has no files.content BLOB column and the external rbx-storage folder is missing."
+                )
         except SQLiteBrowserError as exc:
             raise RobloxCacheError(str(exc)) from exc
+
+    def _read_database_records(self) -> dict[str, dict[str, Any]]:
+        """Read cache metadata and optional content BLOBs using a WAL-aware SQLite connection."""
+        try:
+            browser = SQLiteBrowser(self.database_path)
+            columns, _ddl, _kind = browser.schema('files')
+            names = {str(column['name']) for column in columns}
+            select = 'id, size'
+            if 'content' in names:
+                select += ', content'
+            if 'atime' in names:
+                select += ', atime'
+            with contextlib.closing(browser.connect_readonly()) as connection:
+                rows = connection.execute(f'SELECT {select} FROM files').fetchall()
+        except (SQLiteBrowserError, sqlite3.Error) as exc:
+            raise RobloxCacheError(f'Could not read the Roblox files table:\n{exc}') from exc
+
+        records: dict[str, dict[str, Any]] = {}
+        for row in rows:
+            ident = row['id']
+            if isinstance(ident, memoryview):
+                ident = ident.tobytes()
+            if not isinstance(ident, bytes) or len(ident) != 16:
+                continue
+            content = row['content'] if 'content' in row.keys() else None
+            if isinstance(content, memoryview):
+                content = content.tobytes()
+            records[ident.hex()] = {
+                'size': row['size'],
+                'content': content,
+                'has_content_column': 'content' in row.keys(),
+                'atime': row['atime'] if 'atime' in row.keys() else 0,
+            }
+        return records
+
+    def _get_entry_data(
+        self, entry_id: str, records: dict[str, dict[str, Any]] | None = None
+    ) -> tuple[bytes, str]:
+        """Return bytes and storage mode, preferring a non-NULL files.content BLOB."""
+        self._validate_entry_id(entry_id)
+        if records is None:
+            records = self._read_database_records()
+        record = records.get(entry_id)
+        if record is not None and isinstance(record.get('content'), bytes):
+            data = record['content']
+            if len(data) > MAX_ENTRY_READ_BYTES:
+                raise RobloxCacheError(f'Entry exceeds the {MAX_ENTRY_READ_BYTES:,}-byte safety limit.')
+            return data, 'database'
+        physical = self._entry_path(entry_id)
+        for path, mode in ((physical, 'file'), (self.library_dir / entry_id, 'library')):
+            if path.is_file():
+                if path.stat().st_size > MAX_ENTRY_READ_BYTES:
+                    raise RobloxCacheError(f'Entry exceeds the {MAX_ENTRY_READ_BYTES:,}-byte safety limit.')
+                return path.read_bytes(), mode
+        raise RobloxCacheError(f'Entry {entry_id} has no content BLOB or physical cache file.')
 
     def _entry_path(self, entry_id: str) -> Path:
         self._validate_entry_id(entry_id)
         return self.assets_path / entry_id[:2] / entry_id
 
     def _read_database_sizes(self) -> dict[str, int]:
-        """Read the known files table in read-only mode, mapping 16-byte IDs to sizes."""
-        try:
-            browser = SQLiteBrowser(self.database_path)
-            with contextlib.closing(browser.connect_readonly()) as connection:
-                rows = connection.execute('SELECT id, size FROM files').fetchall()
-        except (SQLiteBrowserError, sqlite3.Error) as exc:
-            raise RobloxCacheError(f'Could not read the Roblox files table:\n{exc}') from exc
-        result: dict[str, int] = {}
-        for row in rows:
-            ident = row['id']
-            size = row['size']
-            if isinstance(ident, memoryview):
-                ident = ident.tobytes()
-            if isinstance(ident, bytes) and len(ident) == 16 and isinstance(size, int):
-                result[ident.hex()] = size
-        return result
+        """Read all row sizes from the SQLite-backed cache."""
+        return {
+            entry_id: int(record['size'])
+            for entry_id, record in self._read_database_records().items()
+            if isinstance(record.get('size'), int)
+        }
 
     def _load_json(self, path: Path, default: Any) -> Any:
         try:
