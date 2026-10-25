@@ -279,7 +279,7 @@ class SQLiteBrowser:
         normalized = sql.strip()
         if not normalized:
             raise SQLiteBrowserError("Enter a SELECT query first.")
-        # Deliberately expose a query-only console: writes go through the backed-up cell editor.
+        # The connection itself enforces read-only mode, regardless of SQL spelling.
         if re.match(r"(?is)^(select|with|explain)\b", normalized) is None:
             raise SQLiteBrowserError("Only SELECT, WITH (read-only) and EXPLAIN queries are allowed here.")
         try:
