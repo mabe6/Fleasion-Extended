@@ -170,6 +170,36 @@ def test_sql_write_is_blocked_for_running_roblox_cache(tmp_path, monkeypatch):
     assert not (tmp_path / "app-config" / "FleasionNT" / "DatabaseBackups").exists()
 
 
+def test_replacing_files_content_blob_keeps_size_column_in_sync(tmp_path, monkeypatch):
+    path = tmp_path / "Roblox" / "rbx-storage.db"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    ident = bytes.fromhex("ab" * 16)
+    original = b"RBXH-original-cache-payload"
+    replacement = b"RBXH-new-cache-payload-with-a-different-length"
+    with sqlite3.connect(path) as connection:
+        connection.execute(
+            "CREATE TABLE files (id BLOB PRIMARY KEY, content BLOB, size INTEGER NOT NULL)"
+        )
+        connection.execute(
+            "INSERT INTO files (id, content, size) VALUES (?, ?, ?)",
+            (ident, original, len(original)),
+        )
+    monkeypatch.setattr(sqlite_browser_module, "CONFIG_DIR", tmp_path / "app-config")
+    monkeypatch.setattr(sqlite_browser_module, "_is_roblox_process_running", lambda: False)
+
+    backup = SQLiteBrowser(path).update_cell("files", "content", ("id",), (ident,), replacement)
+
+    assert backup.is_file()
+    with sqlite3.connect(path) as connection:
+        assert connection.execute(
+            "SELECT content, size FROM files WHERE id = ?", (ident,)
+        ).fetchone() == (replacement, len(replacement))
+    with sqlite3.connect(backup) as connection:
+        assert connection.execute(
+            "SELECT content, size FROM files WHERE id = ?", (ident,)
+        ).fetchone() == (original, len(original))
+
+
 def test_roblox_cache_edit_is_blocked_while_client_is_running(tmp_path, monkeypatch):
     path = _make_database(tmp_path / "Roblox" / "rbx-storage.db")
     monkeypatch.setattr(sqlite_browser_module, "CONFIG_DIR", tmp_path / "app-config")
