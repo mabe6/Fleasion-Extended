@@ -1083,27 +1083,18 @@ class SystemTray:
             self._toggle_dashboard()
 
     def _show_local_database_editor(self):
-        """Open the local SQLite browser/editor inside Fleasion's existing GUI."""
-        from .gui.local_database_editor import LocalDatabaseEditorDialog
-
-        for window in self.open_windows:
-            if isinstance(window, LocalDatabaseEditorDialog):
-                window.showNormal()
-                window.show()
-                window.raise_()
-                window.activateWindow()
-                return
-
-        window = LocalDatabaseEditorDialog()
-        window.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
-        window.destroyed.connect(
-            lambda _obj=None, _self=self, _window=window: _self._remove_window(_window)
-        )
-        self.open_windows.append(window)
-        self._apply_always_on_top_to_window(window)
-        window.show()
-        window.raise_()
-        window.activateWindow()
+        """Open the Fleasion dashboard on its embedded Local DB tab."""
+        self._show_replacer_config()
+        window = self.dashboard_window
+        if window is None:
+            return
+        editor_tab = getattr(window, '_local_database_editor_tab', None)
+        tab_widget = getattr(window, 'tab_widget', None)
+        if editor_tab is None or tab_widget is None:
+            return
+        tab_index = tab_widget.indexOf(editor_tab)
+        if tab_index >= 0:
+            tab_widget.setCurrentIndex(tab_index)
 
     def _show_delete_cache(self):
         """Show Delete Cache window."""
