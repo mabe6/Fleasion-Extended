@@ -32,6 +32,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: local-db-tests-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   sqlite-editor:
     name: SQLite editor tests (Python 3.14)
