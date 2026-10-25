@@ -194,8 +194,25 @@ class RobloxCacheStore:
         except SQLiteBrowserError as exc:
             raise RobloxCacheError(str(exc)) from exc
 
-    def _read_database_records(self) -> dict[str, dict[str, Any]]:
-        """Read cache metadata and optional content BLOBs using a WAL-aware SQLite connection."""
+    def _decode_database_row(self, row: sqlite3.Row) -> tuple[str, dict[str, Any]] | None:
+        ident = row['id']
+        if isinstance(ident, memoryview):
+            ident = ident.tobytes()
+        if not isinstance(ident, bytes) or len(ident) != 16:
+            return None
+        content = row['content'] if 'content' in row.keys() else None
+        if isinstance(content, memoryview):
+            content = content.tobytes()
+        return ident.hex(), {
+            'size': row['size'],
+            'content': content,
+            'has_content_column': 'content' in row.keys(),
+            'atime': row['atime'] if 'atime' in row.keys() else 0,
+        }
+
+    def _read_database_record(self, entry_id: str) -> dict[str, Any] | None:
+        """Read one row. SQLite's own connection includes committed WAL frames when present."""
+        self._validate_entry_id(entry_id)
         try:
             browser = SQLiteBrowser(self.database_path)
             columns, _ddl, _kind = browser.schema('files')
@@ -206,36 +223,44 @@ class RobloxCacheStore:
             if 'atime' in names:
                 select += ', atime'
             with contextlib.closing(browser.connect_readonly()) as connection:
-                rows = connection.execute(f'SELECT {select} FROM files').fetchall()
+                row = connection.execute(
+                    f'SELECT {select} FROM files WHERE id = ?',
+                    (bytes.fromhex(entry_id),),
+                ).fetchone()
+            if row is None:
+                return None
+            decoded = self._decode_database_row(row)
+            return decoded[1] if decoded else None
         except (SQLiteBrowserError, sqlite3.Error) as exc:
-            raise RobloxCacheError(f'Could not read the Roblox files table:\n{exc}') from exc
+            raise RobloxCacheError(f'Could not read database entry {entry_id}:\\n{exc}') from exc
 
-        records: dict[str, dict[str, Any]] = {}
-        for row in rows:
-            ident = row['id']
-            if isinstance(ident, memoryview):
-                ident = ident.tobytes()
-            if not isinstance(ident, bytes) or len(ident) != 16:
-                continue
-            content = row['content'] if 'content' in row.keys() else None
-            if isinstance(content, memoryview):
-                content = content.tobytes()
-            records[ident.hex()] = {
-                'size': row['size'],
-                'content': content,
-                'has_content_column': 'content' in row.keys(),
-                'atime': row['atime'] if 'atime' in row.keys() else 0,
-            }
-        return records
+    def _iter_database_records(self):
+        """Yield one cache row at a time, avoiding loading a large BLOB database into RAM."""
+        browser = SQLiteBrowser(self.database_path)
+        try:
+            columns, _ddl, _kind = browser.schema('files')
+            names = {str(column['name']) for column in columns}
+            select = 'id, size'
+            if 'content' in names:
+                select += ', content'
+            if 'atime' in names:
+                select += ', atime'
+            with contextlib.closing(browser.connect_readonly()) as connection:
+                cursor = connection.execute(f'SELECT {select} FROM files')
+                for row in cursor:
+                    decoded = self._decode_database_row(row)
+                    if decoded is not None:
+                        yield decoded
+        except (SQLiteBrowserError, sqlite3.Error) as exc:
+            raise RobloxCacheError(f'Could not scan the Roblox files table:\\n{exc}') from exc
 
     def _get_entry_data(
-        self, entry_id: str, records: dict[str, dict[str, Any]] | None = None
+        self, entry_id: str, record: dict[str, Any] | None = None
     ) -> tuple[bytes, str]:
         """Return bytes and storage mode, preferring a non-NULL files.content BLOB."""
         self._validate_entry_id(entry_id)
-        if records is None:
-            records = self._read_database_records()
-        record = records.get(entry_id)
+        if record is None:
+            record = self._read_database_record(entry_id)
         if record is not None and isinstance(record.get('content'), bytes):
             data = record['content']
             if len(data) > MAX_ENTRY_READ_BYTES:
@@ -254,12 +279,20 @@ class RobloxCacheStore:
         return self.assets_path / entry_id[:2] / entry_id
 
     def _read_database_sizes(self) -> dict[str, int]:
-        """Read all row sizes from the SQLite-backed cache."""
-        return {
-            entry_id: int(record['size'])
-            for entry_id, record in self._read_database_records().items()
-            if isinstance(record.get('size'), int)
-        }
+        """Read only ID/size metadata, not content BLOBs."""
+        result: dict[str, int] = {}
+        try:
+            browser = SQLiteBrowser(self.database_path)
+            with contextlib.closing(browser.connect_readonly()) as connection:
+                for row in connection.execute('SELECT id, size FROM files'):
+                    ident = row['id']
+                    if isinstance(ident, memoryview):
+                        ident = ident.tobytes()
+                    if isinstance(ident, bytes) and len(ident) == 16 and isinstance(row['size'], int):
+                        result[ident.hex()] = row['size']
+        except (SQLiteBrowserError, sqlite3.Error) as exc:
+            raise RobloxCacheError(f'Could not read the Roblox files table:\\n{exc}') from exc
+        return result
 
     def _load_json(self, path: Path, default: Any) -> Any:
         try:
@@ -310,7 +343,6 @@ class RobloxCacheStore:
     def scan(self, *, limit: int = 100_000) -> list[RobloxCacheEntry]:
         """Scan database BLOBs first, then include legacy file-backed cache entries."""
         self.validate()
-        records = self._read_database_records()
         manifest = self._manifest()
         results: list[RobloxCacheEntry] = []
         seen: set[str] = set()
@@ -320,8 +352,7 @@ class RobloxCacheStore:
             if entry_id in seen:
                 return
             seen.add(entry_id)
-            head = data[:ENTRY_HEAD_READ]
-            url, payload, has_header = split_rbxh_entry(head)
+            url, payload, has_header = split_rbxh_entry(data[:ENTRY_HEAD_READ])
             swap_record = manifest.get(entry_id, {})
             status = ''
             if swap_record:
@@ -343,11 +374,11 @@ class RobloxCacheStore:
                 storage_mode=storage_mode,
             ))
 
-        for entry_id, record in records.items():
+        for entry_id, record in self._iter_database_records():
             try:
-                data, storage_mode = self._get_entry_data(entry_id, records)
+                data, storage_mode = self._get_entry_data(entry_id, record)
             except RobloxCacheError:
-                # Empty content rows with no physical entry are metadata-only, not swappable assets.
+                # Rows with NULL content and no physical entry are metadata-only.
                 continue
             path = self._entry_path(entry_id)
             try:
@@ -363,8 +394,9 @@ class RobloxCacheStore:
                 break
 
         # Some older cache versions store payloads as separate files and leave content NULL.
-        # Also retain orphan files so the UI can diagnose rows whose DB metadata is missing.
+        # Also retain orphan files so the UI can diagnose entries missing DB metadata.
         if len(results) < limit and self.assets_path.is_dir():
+            sizes = self._read_database_sizes()
             for directory, dirnames, filenames in os.walk(self.assets_path, followlinks=False):
                 dirnames.sort()
                 for filename in filenames:
@@ -378,7 +410,7 @@ class RobloxCacheStore:
                         data = path.read_bytes()
                     except OSError:
                         continue
-                    add_entry(filename, data, 'file', records.get(filename, {}).get('size'), stat_result.st_mtime)
+                    add_entry(filename, data, 'file', sizes.get(filename), stat_result.st_mtime)
                     if len(results) >= limit:
                         break
                 if len(results) >= limit:
@@ -388,8 +420,8 @@ class RobloxCacheStore:
         return results
 
     def database_size(self, entry_id: str) -> int | None:
-        self._validate_entry_id(entry_id)
-        return self._read_database_sizes().get(entry_id)
+        record = self._read_database_record(entry_id)
+        return int(record['size']) if record and isinstance(record.get('size'), int) else None
 
     def _require_client_closed(self) -> None:
         if _is_roblox_process_running():
