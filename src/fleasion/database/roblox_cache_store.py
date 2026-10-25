@@ -717,37 +717,61 @@ class RobloxCacheStore:
         return messages or ['There are no active replacements to restore.']
 
     def detect_payload_length_fields(self, *, sample_limit: int = 400) -> dict[str, Any] | None:
-        """Infer length field positions only when at least 90% of real samples agree."""
+        """Infer length field positions from database BLOBs and legacy physical cache files."""
         votes: dict[tuple[int, int], int] = {}
         total = 0
-        if not self.assets_path.is_dir():
-            return None
-        for directory, dirnames, filenames in os.walk(self.assets_path, followlinks=False):
-            dirnames.sort()
-            for filename in filenames:
-                if HEX32.fullmatch(filename) is None:
-                    continue
-                path = Path(directory) / filename
-                try:
-                    if path.stat().st_size > 1_000_000:
-                        continue
-                    data = path.read_bytes()
-                    _url, payload_start = parse_rbxh_header(data)
-                except (OSError, RobloxCacheError):
-                    continue
-                payload_length = len(data) - payload_start
-                if payload_length < 256:
-                    continue
-                metadata_start = payload_start - RBXH_META_SIZE
-                total += 1
-                for width, fmt in ((4, '<I'), (8, '<Q')):
-                    for offset in range(RBXH_META_SIZE - width + 1):
-                        if struct.unpack_from(fmt, data, metadata_start + offset)[0] == payload_length:
-                            votes[(offset, width)] = votes.get((offset, width), 0) + 1
-                if total >= sample_limit:
-                    break
+        seen: set[str] = set()
+
+        def inspect(data: bytes) -> None:
+            nonlocal total
+            if total >= sample_limit or len(data) > 1_000_000:
+                return
+            try:
+                _url, payload_start = parse_rbxh_header(data)
+            except RobloxCacheError:
+                return
+            payload_length = len(data) - payload_start
+            if payload_length < 256:
+                return
+            metadata_start = payload_start - RBXH_META_SIZE
+            total += 1
+            for width, fmt in ((4, '<I'), (8, '<Q')):
+                for offset in range(RBXH_META_SIZE - width + 1):
+                    if struct.unpack_from(fmt, data, metadata_start + offset)[0] == payload_length:
+                        votes[(offset, width)] = votes.get((offset, width), 0) + 1
+
+        for entry_id, record in self._iter_database_records():
+            content = record.get('content')
+            if isinstance(content, bytes):
+                inspect(content)
+                seen.add(entry_id)
+            else:
+                path = self._entry_path(entry_id)
+                if path.is_file():
+                    try:
+                        inspect(path.read_bytes())
+                        seen.add(entry_id)
+                    except OSError:
+                        pass
             if total >= sample_limit:
                 break
+
+        if total < sample_limit and self.assets_path.is_dir():
+            for directory, dirnames, filenames in os.walk(self.assets_path, followlinks=False):
+                dirnames.sort()
+                for filename in filenames:
+                    if filename in seen or HEX32.fullmatch(filename) is None:
+                        continue
+                    path = Path(directory) / filename
+                    try:
+                        inspect(path.read_bytes())
+                    except OSError:
+                        continue
+                    if total >= sample_limit:
+                        break
+                if total >= sample_limit:
+                    break
+
         if total < 3:
             return None
         chosen: dict[int, tuple[int, int]] = {}
@@ -786,9 +810,7 @@ class RobloxCacheStore:
                 'The selected file appears to be a complete RBXH cache entry, not a raw asset payload. '
                 'Choose an asset file such as RBXM, PNG, mesh or audio, or select the source entry in Cache Slots.'
             )
-        target_path = self._entry_path(target_id)
-        if not target_path.is_file():
-            raise RobloxCacheError('The target entry file is not in the local cache.')
+        target_data, _target_mode = self._get_entry_data(target_id)
         fields = self.detect_payload_length_fields()
         if not fields:
             raise RobloxCacheError(
@@ -799,7 +821,7 @@ class RobloxCacheStore:
 
         manifest_record = self._manifest().get(target_id, {})
         saved_original = self.originals_dir / target_id
-        template = saved_original.read_bytes() if manifest_record and saved_original.is_file() else target_path.read_bytes()
+        template = saved_original.read_bytes() if manifest_record and saved_original.is_file() else target_data
         wrapped_entry = _rewrite_payload_length_fields(template, payload, fields['fields'])
         source_id = hashlib.md5(wrapped_entry).hexdigest()
 
@@ -814,13 +836,9 @@ class RobloxCacheStore:
         )
 
     def export_entry(self, entry_id: str, destination: str | os.PathLike[str]) -> Path:
-        """Export raw cache bytes and a small header/DB diagnostic report."""
+        """Export raw cache bytes (from content BLOB or a physical file) and a diagnostic report."""
         self._validate_entry_id(entry_id)
-        physical = self._entry_path(entry_id)
-        source = physical if physical.is_file() else self.library_dir / entry_id
-        if not source.is_file():
-            raise RobloxCacheError('Cache entry file not found.')
-        data = source.read_bytes()
+        data, storage_mode = self._get_entry_data(entry_id)
         output_dir = Path(destination).expanduser()
         output_dir.mkdir(parents=True, exist_ok=True)
         output_path = output_dir / f'{entry_id}.bin'
@@ -830,15 +848,23 @@ class RobloxCacheStore:
             db_size = self.database_size(entry_id)
         except RobloxCacheError:
             db_size = None
+        physical = self._entry_path(entry_id)
+        if physical.is_file():
+            modified_text = time.strftime(
+                '%Y-%m-%d %H:%M:%S', time.localtime(physical.stat().st_mtime)
+            )
+        else:
+            modified_text = 'stored in SQLite BLOB'
         report = [
             f'Entry ID: {entry_id}',
-            f'File size: {len(data)}',
+            f'Storage mode: {storage_mode}',
+            f'File/content size: {len(data)}',
             f'Database size: {db_size}',
             f'RBXH header: {"yes" if has_header else "NO"}',
             f'URL: {url}',
             f'Detected kind: {detect_roblox_payload_kind(payload)}',
             f'First 96 bytes: {data[:96].hex(" ")}',
-            f'Modified: {time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(source.stat().st_mtime))}',
+            f'Modified: {modified_text}',
         ]
         (output_dir / f'{entry_id}.txt').write_text('\n'.join(report) + '\n', 'utf-8')
         return output_path
@@ -868,7 +894,7 @@ class RobloxCacheStore:
             if entry.file_size > 1_000_000 or not entry.has_rbxh_header:
                 continue
             try:
-                data = self._entry_path(entry.entry_id).read_bytes()
+                data, _mode = self._get_entry_data(entry.entry_id)
                 _url, payload_start = parse_rbxh_header(data)
             except (OSError, RobloxCacheError):
                 continue
