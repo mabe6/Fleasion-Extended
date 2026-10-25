@@ -134,7 +134,7 @@ def test_import_refuses_to_guess_header_layout_from_too_few_entries(tmp_path, mo
     import_file = tmp_path / "custom.rbxm"
     import_file.write_bytes(b"<roblox!" + b"X" * 400)
 
-    with pytest.raises(RobloxCacheError, match="verified the RBXH payload-length fields"):
+    with pytest.raises(RobloxCacheError, match="Could not verify the RBXH payload-length fields"):
         store.import_file(target_id, import_file)
 
     assert store._entry_path(target_id).read_bytes().endswith(b"T" * 350)
