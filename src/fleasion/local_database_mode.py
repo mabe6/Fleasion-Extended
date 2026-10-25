@@ -4,6 +4,12 @@ from __future__ import annotations
 
 from typing import Any
 
+DEFAULT_DATABASE_MODE_SETTINGS = {
+    "proxy_features_enabled": False,
+    "clear_cache_on_launch": False,
+    "auto_delete_cache_on_exit": False,
+}
+
 
 def migrate_local_database_mode(config_manager: Any) -> bool:
     """Disable proxy interception and automatic cache deletion once in this fork."""
