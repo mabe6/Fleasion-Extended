@@ -320,11 +320,11 @@ class SQLiteBrowser:
         normalized = sql.strip()
         if not normalized:
             raise SQLiteBrowserError('Enter a write statement first.')
-        if re.match(r'(?is)^(insert|update|delete|replace|create|alter|drop)\\b', normalized) is None:
+        if re.match(r'(?is)^(insert|update|delete|replace|create|alter|drop)\b', normalized) is None:
             raise SQLiteBrowserError(
                 'Write mode accepts one INSERT, UPDATE, DELETE, REPLACE, CREATE, ALTER or DROP statement.'
             )
-        if re.search(r'(?is)\\breturning\\b', normalized):
+        if re.search(r'(?is)\breturning\b', normalized):
             raise SQLiteBrowserError(
                 'RETURNING is not supported in write mode. Run a separate SELECT after the write.'
             )
@@ -351,7 +351,7 @@ class SQLiteBrowser:
                 with contextlib.suppress(sqlite3.Error):
                     connection.rollback()
             raise SQLiteBrowserError(
-                f'SQL write failed; the pre-write backup is saved at:\\n{backup_path}\\n\\n{exc}'
+                f'SQL write failed; the pre-write backup is saved at:\n{backup_path}\n\n{exc}'
             ) from exc
         finally:
             if connection is not None:
