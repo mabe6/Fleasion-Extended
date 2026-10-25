@@ -506,17 +506,11 @@ class RobloxCacheStore:
         return destination
 
     def _source_bytes(self, source_id: str) -> bytes:
-        self._validate_entry_id(source_id)
-        for path in (self._entry_path(source_id), self.library_dir / source_id):
-            if path.is_file():
-                size = path.stat().st_size
-                if size > MAX_ENTRY_READ_BYTES:
-                    raise RobloxCacheError(f'Source entry exceeds the {MAX_ENTRY_READ_BYTES:,}-byte safety limit.')
-                return path.read_bytes()
-        raise RobloxCacheError('Source entry is not in the cache or the Fleasion local library.')
+        data, _mode = self._get_entry_data(source_id)
+        return data
 
     def swap(self, target_id: str, source_id: str, *, origin: str = '') -> str:
-        """Swap a whole source entry into a target slot, with DB backup and rollback."""
+        """Replace one cache entry in SQLite content BLOBs or legacy files with rollback."""
         self._require_client_closed()
         self.validate()
         self._validate_entry_id(target_id)
@@ -524,17 +518,22 @@ class RobloxCacheStore:
         if target_id == source_id:
             raise RobloxCacheError('Target and source are the same cache entry.')
 
-        target_path = self._entry_path(target_id)
-        if not target_path.is_file():
-            raise RobloxCacheError('Target entry file is not present in the local cache.')
-        current_db_size = self.database_size(target_id)
-        if current_db_size is None:
+        records = self._read_database_records()
+        target_data, target_mode = self._get_entry_data(target_id, records)
+        current_db_size = records.get(target_id, {}).get('size')
+        if not isinstance(current_db_size, int):
             raise RobloxCacheError('Target has no corresponding row in rbx-storage.db.')
-        new_data = self._source_bytes(source_id)
-        if target_path.stat().st_size > MAX_ENTRY_READ_BYTES:
+        if len(target_data) > MAX_ENTRY_READ_BYTES:
             raise RobloxCacheError('Target entry exceeds the configured safety limit.')
-        old_data = target_path.read_bytes()
+        if target_mode == 'database' and current_db_size != len(target_data):
+            raise RobloxCacheError(
+                f'The target content BLOB has {len(target_data)} bytes but files.size says {current_db_size}. '
+                'Refresh and inspect the database before replacing it.'
+            )
 
+        new_data = self._source_bytes(source_id)
+        if len(new_data) > MAX_ENTRY_READ_BYTES:
+            raise RobloxCacheError('Source entry exceeds the configured safety limit.')
         status = self.swap_status(target_id)
         if self.swap_status(source_id) == 'swapped':
             raise RobloxCacheError('Source is currently swapped itself. Restore its original entry first.')
@@ -542,25 +541,37 @@ class RobloxCacheStore:
         backup_path = self._backup_database()
         old_manifest = self._manifest()
         if status != 'swapped':
-            self._backup_original(target_id, old_data)
+            self._backup_original(target_id, target_data)
 
-        if source_id != target_id and self._entry_path(source_id).is_file():
+        if target_mode == 'file' and self._entry_path(source_id).is_file():
             self.library_dir.mkdir(parents=True, exist_ok=True)
             library_copy = self.library_dir / source_id
             if not library_copy.exists():
                 library_copy.write_bytes(new_data)
 
         replaced_file = False
+        db_write_attempted = False
         try:
-            self._atomic_replace(target_path, new_data)
-            replaced_file = True
-            self._update_database_size(target_id, len(new_data), expected_old_size=current_db_size)
+            if target_mode == 'database':
+                db_write_attempted = True
+                self._update_database_blob(
+                    target_id,
+                    new_data,
+                    expected_old_size=current_db_size,
+                    expected_old_data=target_data,
+                )
+            else:
+                self._atomic_replace(self._entry_path(target_id), new_data)
+                replaced_file = True
+                self._update_database_size(target_id, len(new_data), expected_old_size=current_db_size)
 
             manifest = self._manifest()
             manifest[target_id] = {
                 'source': source_id,
                 'swapped_size': len(new_data),
-                'original_size': len(old_data),
+                'swapped_sha256': hashlib.sha256(new_data).hexdigest(),
+                'original_size': len(target_data),
+                'storage_mode': target_mode,
                 'time': time.strftime('%Y-%m-%d %H:%M:%S'),
                 'origin': origin or f'entry {source_id[:8]}',
                 'database_backup': str(backup_path),
@@ -570,9 +581,18 @@ class RobloxCacheStore:
         except Exception as exc:
             if replaced_file:
                 with contextlib.suppress(OSError):
-                    self._atomic_replace(target_path, old_data)
-            with contextlib.suppress(Exception):
-                self._update_database_size(target_id, current_db_size)
+                    self._atomic_replace(self._entry_path(target_id), target_data)
+            if db_write_attempted:
+                with contextlib.suppress(Exception):
+                    self._update_database_blob(
+                        target_id,
+                        target_data,
+                        expected_old_size=len(new_data),
+                        expected_old_data=new_data,
+                    )
+            else:
+                with contextlib.suppress(Exception):
+                    self._update_database_size(target_id, current_db_size)
             with contextlib.suppress(Exception):
                 self._save_json(self.manifest_path, old_manifest)
             if isinstance(exc, RobloxCacheError):
@@ -582,12 +602,12 @@ class RobloxCacheStore:
             ) from exc
 
         return (
-            f'Swapped {target_id[:8]}… ← {source_id[:8]}… ({len(new_data):,} bytes). '
+            f'Swapped {target_id[:8]}… ← {source_id[:8]}… ({len(new_data):,} bytes, {target_mode}). '
             'Restart Roblox to test it.'
         )
 
     def restore(self, target_id: str) -> str:
-        """Restore a target entry and keep its SQLite size row consistent."""
+        """Restore an entry backup and atomically synchronize BLOB content and size where applicable."""
         self._require_client_closed()
         self.validate()
         self._validate_entry_id(target_id)
@@ -596,46 +616,59 @@ class RobloxCacheStore:
         if not record:
             raise RobloxCacheError('That entry has no active replacement to restore.')
 
-        target_path = self._entry_path(target_id)
-        if not target_path.is_file():
-            raise RobloxCacheError('The cache target file no longer exists.')
-        current_data = target_path.read_bytes()
-        current_db_size = self.database_size(target_id)
-        if current_db_size is None:
+        records = self._read_database_records()
+        current_data, current_mode = self._get_entry_data(target_id, records)
+        current_db_size = records.get(target_id, {}).get('size')
+        if not isinstance(current_db_size, int):
             raise RobloxCacheError('The target has no corresponding row in rbx-storage.db.')
         backup_path = self._backup_database()
+        original_path = self.originals_dir / target_id
 
         if self.swap_status(target_id) == 'swapped':
-            original_path = self.originals_dir / target_id
             if not original_path.is_file():
                 raise RobloxCacheError(
-                    f'The original cache file is missing. Database backup: {backup_path}'
+                    f'The original cache entry is missing. Database backup: {backup_path}'
                 )
             original_data = original_path.read_bytes()
-            self._atomic_replace(target_path, original_data)
-            try:
-                self._update_database_size(
-                    target_id, len(original_data), expected_old_size=current_db_size
+            if record.get('storage_mode') == 'database':
+                self._update_database_blob(
+                    target_id,
+                    original_data,
+                    expected_old_size=current_db_size,
+                    expected_old_data=current_data,
                 )
-            except Exception:
-                with contextlib.suppress(OSError):
-                    self._atomic_replace(target_path, current_data)
-                raise
+            else:
+                self._atomic_replace(self._entry_path(target_id), original_data)
+                try:
+                    self._update_database_size(
+                        target_id, len(original_data), expected_old_size=current_db_size
+                    )
+                except Exception:
+                    with contextlib.suppress(OSError):
+                        self._atomic_replace(self._entry_path(target_id), current_data)
+                    raise
             message = f'Restored {target_id[:8]}… to its saved original ({len(original_data):,} bytes).'
         else:
-            # Roblox or another process rewrote this slot. Keep that file and synchronize the DB size.
-            try:
+            if record.get('storage_mode') == 'database':
+                self._update_database_blob(
+                    target_id,
+                    current_data,
+                    expected_old_size=current_db_size,
+                    expected_old_data=current_data,
+                )
+            elif current_mode == 'file':
                 self._update_database_size(
                     target_id, len(current_data), expected_old_size=current_db_size
                 )
-            except Exception:
-                raise
-            message = f'{target_id[:8]}… was rewritten externally; kept the current file and synchronized its DB size.'
+            message = (
+                f'{target_id[:8]}… changed outside Fleasion; kept the current content '
+                'and synchronized its size metadata.'
+            )
 
         manifest.pop(target_id, None)
         self._save_json(self.manifest_path, manifest)
         with contextlib.suppress(OSError):
-            (self.originals_dir / target_id).unlink()
+            original_path.unlink()
         self._log_history('restore', target_id, str(record.get('source', '')), str(backup_path))
         return message
 
