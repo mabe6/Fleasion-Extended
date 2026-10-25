@@ -11,7 +11,6 @@ from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import (
     QAbstractItemView,
     QComboBox,
-    QDialog,
     QFileDialog,
     QHBoxLayout,
     QLabel,
@@ -63,13 +62,15 @@ def _coerce_value(text: str, original: Any) -> Any:
     return text
 
 
-class LocalDatabaseEditorDialog(QDialog):
+class LocalDatabaseEditorWidget(QWidget):
     """Browse tables and edit individual cells with a verified backup before each write."""
 
     PAGE_SIZES = (25, 50, 100, 250, 500, 1000)
 
-    def __init__(self, parent: QWidget | None = None):
+    def __init__(self, parent: QWidget | None = None, *, embedded: bool = False):
         super().__init__(parent)
+        self.embedded = embedded
+        self.setWindowFlag(Qt.WindowType.Window, not embedded)
         self.setWindowTitle("Local SQLite Database Editor — Fleasion Extended")
         self.resize(1180, 760)
         self.browser: SQLiteBrowser | None = None
@@ -224,9 +225,10 @@ class LocalDatabaseEditorDialog(QDialog):
         refresh_button = QPushButton("Refresh")
         refresh_button.clicked.connect(self._refresh_current_table)
         footer.addWidget(refresh_button)
-        close_button = QPushButton("Close")
-        close_button.clicked.connect(self.close)
-        footer.addWidget(close_button)
+        if not self.embedded:
+            close_button = QPushButton("Close")
+            close_button.clicked.connect(self.close)
+            footer.addWidget(close_button)
         root.addLayout(footer)
 
     def _find_default_database(self) -> None:
