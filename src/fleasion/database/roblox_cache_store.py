@@ -550,9 +550,9 @@ class RobloxCacheStore:
         if target_id == source_id:
             raise RobloxCacheError('Target and source are the same cache entry.')
 
-        records = self._read_database_records()
-        target_data, target_mode = self._get_entry_data(target_id, records)
-        current_db_size = records.get(target_id, {}).get('size')
+        target_record = self._read_database_record(target_id)
+        target_data, target_mode = self._get_entry_data(target_id, target_record)
+        current_db_size = target_record.get('size') if target_record else None
         if not isinstance(current_db_size, int):
             raise RobloxCacheError('Target has no corresponding row in rbx-storage.db.')
         if len(target_data) > MAX_ENTRY_READ_BYTES:
@@ -648,9 +648,9 @@ class RobloxCacheStore:
         if not record:
             raise RobloxCacheError('That entry has no active replacement to restore.')
 
-        records = self._read_database_records()
-        current_data, current_mode = self._get_entry_data(target_id, records)
-        current_db_size = records.get(target_id, {}).get('size')
+        target_record = self._read_database_record(target_id)
+        current_data, current_mode = self._get_entry_data(target_id, target_record)
+        current_db_size = target_record.get('size') if target_record else None
         if not isinstance(current_db_size, int):
             raise RobloxCacheError('The target has no corresponding row in rbx-storage.db.')
         backup_path = self._backup_database()
