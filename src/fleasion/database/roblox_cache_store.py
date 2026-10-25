@@ -53,7 +53,7 @@ def default_roblox_cache_root() -> Path:
     local_app_data = os.environ.get('LOCALAPPDATA')
     if local_app_data:
         return Path(local_app_data) / 'Roblox'
-    sober_cache = (
+    sober_data = (
         Path.home()
         / '.var'
         / 'app'
@@ -61,8 +61,12 @@ def default_roblox_cache_root() -> Path:
         / 'data'
         / 'sober'
     )
-    if sober_cache.is_dir():
-        return sober_cache
+    # Sober commonly keeps its Roblox database under appData while assets use sibling folders.
+    sober_appdata = sober_data / 'appData'
+    if (sober_appdata / 'rbx-storage.db').is_file() or sober_appdata.is_dir():
+        return sober_appdata
+    if (sober_data / 'rbx-storage.db').is_file():
+        return sober_data
     return Path.home() / 'Roblox'
 
 
