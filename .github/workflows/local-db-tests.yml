@@ -20,14 +20,12 @@ on:
     branches:
       - main
     paths:
+      - ".github/workflows/local-db-tests.yml"
       - "src/fleasion/database/**"
       - "src/fleasion/gui/local_database_editor.py"
-      - "src/fleasion/gui/replacer_config.py"
-      - "src/fleasion/tray.py"
-      - "src/fleasion/app.py"
-      - "src/fleasion/config/manager.py"
+      - "src/fleasion/gui/roblox_cache_tab.py"
+      - "tests/test_roblox_cache_store.py"
       - "tests/test_sqlite_browser.py"
-      - "tests/test_local_database_mode.py"
 
 permissions:
   contents: read
