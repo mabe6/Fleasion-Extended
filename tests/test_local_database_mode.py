@@ -3,13 +3,13 @@
 from types import SimpleNamespace
 
 from fleasion.local_database_mode import migrate_local_database_mode as _migrate_local_database_mode
-from fleasion.config.manager import DEFAULT_SETTINGS
+from fleasion.local_database_mode import DEFAULT_DATABASE_MODE_SETTINGS
 
 
 def test_new_installs_default_to_local_database_mode():
-    assert DEFAULT_SETTINGS["proxy_features_enabled"] is False
-    assert DEFAULT_SETTINGS["clear_cache_on_launch"] is False
-    assert DEFAULT_SETTINGS["auto_delete_cache_on_exit"] is False
+    assert DEFAULT_DATABASE_MODE_SETTINGS["proxy_features_enabled"] is False
+    assert DEFAULT_DATABASE_MODE_SETTINGS["clear_cache_on_launch"] is False
+    assert DEFAULT_DATABASE_MODE_SETTINGS["auto_delete_cache_on_exit"] is False
 
 
 def test_existing_configuration_is_migrated_once_to_local_database_mode():
