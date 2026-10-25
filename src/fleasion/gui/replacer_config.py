@@ -753,6 +753,12 @@ class ReplacerConfigWindow(QDialog):
         self._local_database_editor_tab = LocalDatabaseEditorWidget(embedded=True)
         self.tab_widget.addTab(self._local_database_editor_tab, 'Local DB')
 
+        # Local cache slots are edited directly on disk, independent of the proxy.
+        from .roblox_cache_tab import RobloxCacheTab
+
+        self._roblox_cache_tab = RobloxCacheTab()
+        self.tab_widget.addTab(self._roblox_cache_tab, 'Cache Slots')
+
         # Create Modifications tab
         if self._mod_manager is not None:
             from .modifications_tab import ModificationsTab
