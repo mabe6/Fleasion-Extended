@@ -77,9 +77,9 @@ class RobloxCacheTab(QWidget):
         search_row.addWidget(self.search_edit, 1)
         root.addLayout(search_row)
 
-        self.table = QTableWidget(0, 8)
+        self.table = QTableWidget(0, 9)
         self.table.setHorizontalHeaderLabels(
-            ['Entry ID', 'Asset ID', 'Kind', 'File size', 'DB size', 'Modified', 'Swap status', 'URL']
+            ['Entry ID', 'Asset ID', 'Kind', 'File/content size', 'DB size', 'Modified', 'Swap status', 'Storage', 'URL']
         )
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
@@ -196,6 +196,7 @@ class RobloxCacheTab(QWidget):
                 _format_size(entry.database_size),
                 time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(entry.modified_at)),
                 entry.swap_status or '—',
+                entry.storage_mode,
                 entry.url,
             ]
             for column, value in enumerate(values):
@@ -208,7 +209,7 @@ class RobloxCacheTab(QWidget):
         self.table.setUpdatesEnabled(True)
         self.table.resizeColumnsToContents()
         self.table.setColumnWidth(0, 270)
-        self.table.setColumnWidth(7, 400)
+        self.table.setColumnWidth(8, 400)
 
     def refresh(self) -> None:
         root = self.root_edit.text().strip().strip('"')
@@ -309,7 +310,7 @@ class RobloxCacheTab(QWidget):
         path = Path(file_name)
         try:
             with path.open('rb') as handle:
-                sample = handle.read(ENTRY_HEAD_READ)
+                sample = handle.read(8192)
             source_kind = detect_roblox_payload_kind(sample)
             if not self._confirm_type_mismatch(target_id, source_kind, path.name):
                 return
