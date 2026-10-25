@@ -11,7 +11,6 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
-from urllib.parse import quote
 
 from ..utils import CONFIG_DIR
 
@@ -52,6 +51,15 @@ class QueryResult:
     columns: tuple[str, ...]
     rows: tuple[tuple[Any, ...], ...]
     truncated: bool
+
+
+@dataclass(frozen=True)
+class WriteResult:
+    """Summary of one backed-up SQL write statement."""
+
+    backup_path: Path
+    affected_rows: int
+    last_row_id: int
 
 
 def quote_identifier(identifier: str) -> str:
@@ -294,6 +302,61 @@ class SQLiteBrowser:
         except sqlite3.Error as exc:
             raise SQLiteBrowserError(f"Read-only query failed:\n{exc}") from exc
 
+    def _require_roblox_cache_closed(self) -> None:
+        """Refuse edits to known Roblox cache databases while their client is running."""
+        is_roblox_cache = (
+            self.path.name.casefold() == 'rbx-storage.db'
+            or 'roblox' in {part.casefold() for part in self.path.parts}
+            or 'sober' in {part.casefold() for part in self.path.parts}
+        )
+        if is_roblox_cache and _is_roblox_process_running():
+            raise SQLiteBrowserError(
+                'Roblox Player/Studio/Sober appears to be running. '
+                'Close it before editing its cache database.'
+            )
+
+    def execute_write(self, sql: str) -> WriteResult:
+        """Execute one explicit SQL write statement after creating a verified backup."""
+        normalized = sql.strip()
+        if not normalized:
+            raise SQLiteBrowserError('Enter a write statement first.')
+        if re.match(r'(?is)^(insert|update|delete|replace|create|alter|drop)\\b', normalized) is None:
+            raise SQLiteBrowserError(
+                'Write mode accepts one INSERT, UPDATE, DELETE, REPLACE, CREATE, ALTER or DROP statement.'
+            )
+        if re.search(r'(?is)\\breturning\\b', normalized):
+            raise SQLiteBrowserError(
+                'RETURNING is not supported in write mode. Run a separate SELECT after the write.'
+            )
+        self._require_file()
+        self._require_roblox_cache_closed()
+        backup_path = self.backup()
+        connection: sqlite3.Connection | None = None
+        try:
+            connection = sqlite3.connect(self.path, timeout=5)
+            connection.execute('PRAGMA busy_timeout = 5000')
+            connection.execute('BEGIN IMMEDIATE')
+            deadline = time.monotonic() + 10.0
+            connection.set_progress_handler(
+                lambda: 1 if time.monotonic() > deadline else 0,
+                10_000,
+            )
+            cursor = connection.execute(normalized)
+            affected_rows = max(0, int(cursor.rowcount))
+            last_row_id = int(cursor.lastrowid or 0)
+            connection.commit()
+            return WriteResult(backup_path, affected_rows, last_row_id)
+        except sqlite3.Error as exc:
+            if connection is not None:
+                with contextlib.suppress(sqlite3.Error):
+                    connection.rollback()
+            raise SQLiteBrowserError(
+                f'SQL write failed; the pre-write backup is saved at:\\n{backup_path}\\n\\n{exc}'
+            ) from exc
+        finally:
+            if connection is not None:
+                connection.close()
+
     def backup(self) -> Path:
         """Create a consistent SQLite backup with the SQLite backup API."""
         self._require_file()
@@ -342,16 +405,7 @@ class SQLiteBrowser:
             if key_column not in valid_columns and key_column not in {"rowid", "_rowid_", "oid"}:
                 raise SQLiteBrowserError("The selected row identifier is no longer valid.")
 
-        is_roblox_cache = (
-            self.path.name.casefold() == "rbx-storage.db"
-            or "roblox" in {part.casefold() for part in self.path.parts}
-            or "sober" in {part.casefold() for part in self.path.parts}
-        )
-        if is_roblox_cache and _is_roblox_process_running():
-            raise SQLiteBrowserError(
-                "Roblox Player/Studio/Sober appears to be running. Close it before editing its cache database."
-            )
-
+        self._require_roblox_cache_closed()
         backup_path = self.backup()
         try:
             with contextlib.closing(sqlite3.connect(self.path, timeout=5)) as connection:
