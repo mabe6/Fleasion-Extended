@@ -125,6 +125,51 @@ def test_update_cell_makes_verified_backup_before_writing(tmp_path, monkeypatch)
         ).fetchone()[0] == 777
 
 
+def test_sql_write_makes_verified_backup_and_commits_one_statement(tmp_path, monkeypatch):
+    path = _make_database(tmp_path / "sample.db")
+    monkeypatch.setattr(sqlite_browser_module, "CONFIG_DIR", tmp_path / "app-config")
+    browser = SQLiteBrowser(path)
+
+    result = browser.execute_write("UPDATE files SET size = 88 WHERE size = 10")
+
+    assert result.affected_rows == 1
+    assert result.backup_path.is_file()
+    with sqlite3.connect(result.backup_path) as connection:
+        assert connection.execute("SELECT size FROM files ORDER BY size LIMIT 1").fetchone()[0] == 10
+        assert connection.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
+    with sqlite3.connect(path) as connection:
+        assert connection.execute("SELECT size FROM files WHERE size = 88").fetchone()[0] == 88
+
+
+def test_sql_write_rejects_multiple_statements_and_non_write_statements(tmp_path, monkeypatch):
+    browser = SQLiteBrowser(_make_database(tmp_path / "sample.db"))
+    monkeypatch.setattr(sqlite_browser_module, "CONFIG_DIR", tmp_path / "app-config")
+
+    with pytest.raises(SQLiteBrowserError, match="Write mode accepts"):
+        browser.execute_write("PRAGMA integrity_check")
+
+    with pytest.raises(SQLiteBrowserError, match="not supported"):
+        browser.execute_write("UPDATE files SET size = 12 RETURNING size")
+
+    with pytest.raises(SQLiteBrowserError, match="SQL write failed"):
+        browser.execute_write("UPDATE files SET size = 12; DELETE FROM files")
+
+    with sqlite3.connect(browser.path) as connection:
+        assert connection.execute("SELECT COUNT(*) FROM files").fetchone()[0] == 2
+
+
+def test_sql_write_is_blocked_for_running_roblox_cache(tmp_path, monkeypatch):
+    path = _make_database(tmp_path / "Roblox" / "rbx-storage.db")
+    monkeypatch.setattr(sqlite_browser_module, "CONFIG_DIR", tmp_path / "app-config")
+    monkeypatch.setattr(sqlite_browser_module, "_is_roblox_process_running", lambda: True)
+    browser = SQLiteBrowser(path)
+
+    with pytest.raises(SQLiteBrowserError, match="Close it before editing"):
+        browser.execute_write("UPDATE files SET size = 100")
+
+    assert not (tmp_path / "app-config" / "FleasionNT" / "DatabaseBackups").exists()
+
+
 def test_roblox_cache_edit_is_blocked_while_client_is_running(tmp_path, monkeypatch):
     path = _make_database(tmp_path / "Roblox" / "rbx-storage.db")
     monkeypatch.setattr(sqlite_browser_module, "CONFIG_DIR", tmp_path / "app-config")
