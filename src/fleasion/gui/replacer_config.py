@@ -747,6 +747,12 @@ class ReplacerConfigWindow(QDialog):
             cache_tab = self._create_cache_tab()
             self.tab_widget.addTab(cache_tab, tr('ui.gui.replacer_config.scraper'))
 
+        # Local SQLite editor: independent of proxy availability and usable offline.
+        from .local_database_editor import LocalDatabaseEditorWidget
+
+        self._local_database_editor_tab = LocalDatabaseEditorWidget(embedded=True)
+        self.tab_widget.addTab(self._local_database_editor_tab, 'Local DB')
+
         # Create Modifications tab
         if self._mod_manager is not None:
             from .modifications_tab import ModificationsTab
@@ -809,6 +815,8 @@ class ReplacerConfigWindow(QDialog):
         self._settings_tab = SettingsTab(self.config_manager, system_tray=self._system_tray)
         self.tab_widget.addTab(self._settings_tab, tr('ui.gui.replacer_config.settings'))
 
+        # This fork focuses on local database work rather than intercepted network traffic.
+        self.tab_widget.setCurrentWidget(self._local_database_editor_tab)
         main_layout.addWidget(self.tab_widget)
 
         self.setLayout(main_layout)
