@@ -22,6 +22,7 @@ from PyQt6.QtWidgets import (
     QHeaderView,
     QApplication,
     QCheckBox,
+    QComboBox,
     QFileDialog,
     QFrame,
     QGroupBox,
