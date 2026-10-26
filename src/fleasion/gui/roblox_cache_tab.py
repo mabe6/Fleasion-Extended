@@ -155,9 +155,6 @@ class RobloxCacheTab(QWidget):
         clear_button = QPushButton('Clear Fields')
         clear_button.clicked.connect(self._clear_swap_fields)
         actions.addWidget(clear_button)
-        self.probe_button = QPushButton('Probe Header')
-        self.probe_button.clicked.connect(self._probe_header)
-        actions.addWidget(self.probe_button)
         edit_layout.addLayout(actions)
         swaps_layout.addWidget(edit_group)
 
@@ -167,12 +164,6 @@ class RobloxCacheTab(QWidget):
         self.status_label.setWordWrap(True)
         swaps_layout.addWidget(self.status_label)
 
-        self.output = QPlainTextEdit()
-        self.output.setReadOnly(True)
-        self.output.setPlaceholderText('Operation details and optional header-probe output.')
-        self.output.setMaximumBlockCount(500)
-        self.output.setMaximumHeight(100)
-        swaps_layout.addWidget(self.output)
         self.set_probe_header_enabled(self._probe_header_enabled)
 
         self.pages.addTab(self.swaps_page, 'Active Swaps')
@@ -232,8 +223,19 @@ class RobloxCacheTab(QWidget):
         export_button = QPushButton('Export Entry…')
         export_button.clicked.connect(self._export_selected)
         inventory_actions.addWidget(export_button)
+        self.probe_button = QPushButton('Probe Header')
+        self.probe_button.clicked.connect(self._probe_header)
+        inventory_actions.addWidget(self.probe_button)
         inventory_actions.addStretch(1)
         entries_layout.addLayout(inventory_actions)
+
+        self.output = QPlainTextEdit()
+        self.output.setReadOnly(True)
+        self.output.setPlaceholderText('Operation details and optional header-probe output.')
+        self.output.setMaximumBlockCount(500)
+        self.output.setMaximumHeight(100)
+        entries_layout.addWidget(self.output)
+        self.set_probe_header_enabled(self._probe_header_enabled)
 
         self.pages.addTab(self.entries_page, 'Cache Slots')
 
