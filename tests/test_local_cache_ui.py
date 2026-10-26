@@ -56,6 +56,18 @@ def test_local_db_opens_on_active_swaps_with_pasteable_ids_and_optional_probe(
         assert widget.swaps_table.rowCount() == 1
         assert widget.swaps_table.item(0, 0).text() == "Active"
         assert widget.swaps_table.item(0, 1).text() == "Replace idle animation"
+        assert widget.swap_count_label.text() == "1 swaps"
+
+        widget.swap_filter_edit.setText("no matching swap")
+        assert widget.swaps_table.rowCount() == 0
+        assert widget.swap_count_label.text() == "0 / 1 swaps"
+        widget.swap_filter_edit.clear()
+        assert widget.swaps_table.rowCount() == 1
+        widget.swap_status_filter.setCurrentIndex(2)
+        assert widget.swaps_table.rowCount() == 0
+        widget.swap_status_filter.setCurrentIndex(1)
+        assert widget.swaps_table.rowCount() == 1
+
         assert widget.probe_button.isHidden()
         assert widget.output.isHidden()
 
