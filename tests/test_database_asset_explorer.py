@@ -6,7 +6,12 @@ import os
 import subprocess
 import sys
 
-from fleasion.gui.database_asset_explorer import _asset_id_from_url, _detect_kind, _kind_group
+from fleasion.gui.database_asset_explorer import (
+    _asset_id_from_url,
+    _detect_kind,
+    _embedded_name,
+    _kind_group,
+)
 
 
 def test_asset_kind_recognizes_readable_animation_and_image_formats() -> None:
@@ -19,6 +24,14 @@ def test_asset_kind_recognizes_readable_animation_and_image_formats() -> None:
     kind, url = _detect_kind(b'\x89PNG\r\n\x1a\n' + b'payload')
     assert kind == 'png'
     assert url == ''
+
+
+def test_embedded_roblox_xml_name_is_readable() -> None:
+    payload = (
+        b'<roblox version="4"><Item class="KeyframeSequence"><Properties>'
+        b'<string name="Name">wave</string></Properties></Item></roblox>'
+    )
+    assert _embedded_name(payload) == 'wave'
 
 
 def test_asset_url_extraction_and_type_groups() -> None:
@@ -59,8 +72,12 @@ with tempfile.TemporaryDirectory() as folder:
     assert widget.set_database(path) is True
     assert len(widget.items) == 2
     assert widget.items_by_id['01' * 16].kind == 'png'
-    widget.kind_filter.setCurrentIndex(widget.kind_filter.findData('Images'))
+    widget._active_kinds = {'png'}
+    widget._render_items()
     assert widget.asset_table.rowCount() == 1
+    assert widget.asset_table.item(0, 4).text() == 'PNG image'
+    assert widget.asset_table.horizontalHeaderItem(1).text() == 'Name / hash'
+    assert widget.preview_panel.isHidden()
     widget.search_edit.setText('01010101')
     assert widget.asset_table.rowCount() == 1
     widget.search_edit.setText('no-such-asset')
