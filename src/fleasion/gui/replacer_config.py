@@ -768,7 +768,9 @@ class ReplacerConfigWindow(QDialog):
         # Local SQLite editor: independent of proxy availability and usable offline.
         from .local_database_editor import LocalDatabaseEditorWidget
 
-        self._local_database_editor_tab = LocalDatabaseEditorWidget(embedded=True)
+        self._local_database_editor_tab = LocalDatabaseEditorWidget(
+            embedded=True, config_manager=self.config_manager
+        )
         self.tab_widget.addTab(self._local_database_editor_tab, 'Local DB')
 
         # Local cache slots are edited directly on disk, independent of the proxy.
