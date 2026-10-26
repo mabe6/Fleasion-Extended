@@ -26,12 +26,14 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+from ..database.animation_payload import inspect_animation_payload
 from ..database.roblox_cache_store import (
     RobloxCacheEntry,
     RobloxCacheError,
     RobloxCacheStore,
     default_roblox_cache_root,
     detect_roblox_payload_kind,
+    split_rbxh_entry,
 )
 from ..utils import log_buffer
 
@@ -178,6 +180,9 @@ class RobloxCacheTab(QWidget):
         clear_button = QPushButton('Clear Fields')
         clear_button.clicked.connect(self._clear_swap_fields)
         actions.addWidget(clear_button)
+        verify_button = QPushButton('Verify Target')
+        verify_button.clicked.connect(self._verify_selected_target)
+        actions.addWidget(verify_button)
         edit_layout.addLayout(actions)
         swaps_layout.addWidget(edit_group)
 
@@ -454,17 +459,25 @@ class RobloxCacheTab(QWidget):
             raise RobloxCacheError('Select a target row or enter a 32-character target entry ID.')
         return target, source
 
-    def _confirm_type_mismatch(self, target_id: str, source_kind: str, source_label: str) -> bool:
+    def _confirm_type_mismatch(
+        self,
+        target_id: str,
+        source_kind: str,
+        source_label: str,
+        *,
+        target_kind: str | None = None,
+    ) -> bool:
         target = self.entries_by_id.get(target_id)
-        if target is None or not source_kind or source_kind == target.kind:
+        target_kind = target_kind or (target.kind if target is not None else '')
+        if not target_kind or not source_kind or source_kind == target_kind:
             return True
-        if {target.kind, source_kind}.issubset({'anim', 'curve-anim'}):
+        if {target_kind, source_kind}.issubset({'anim', 'curve-anim'}):
             detail = (
-                f'Target is {target.kind}; source is {source_kind}. Both are animation formats, '
-                'but compatibility has not been verified.'
+                f'Target is {target_kind}; source is {source_kind}. Both are animation formats, '
+                'but KeyframeSequence and CurveAnimation are not converted by this importer.'
             )
         else:
-            detail = f'Target looks like {target.kind}; source looks like {source_kind}.'
+            detail = f'Target looks like {target_kind}; source looks like {source_kind}.'
         result = QMessageBox.warning(
             self,
             'Asset type mismatch',
@@ -524,30 +537,164 @@ class RobloxCacheTab(QWidget):
             return
         path = Path(file_name)
         try:
-            with path.open('rb') as handle:
-                sample = handle.read(8192)
-            source_kind = detect_roblox_payload_kind(sample)
-            if not self._confirm_type_mismatch(target_id, source_kind, path.name):
+            if not path.is_file():
+                raise RobloxCacheError(f'Import file not found:\n{path}')
+            if path.stat().st_size <= 0:
+                raise RobloxCacheError('The selected import file is empty.')
+            if path.stat().st_size > 100_000_000:
+                raise RobloxCacheError('The selected file exceeds the 100 MB import limit.')
+            payload = path.read_bytes()
+            source_kind = detect_roblox_payload_kind(payload)
+
+            # Inspect the actual slot data, not just the currently displayed table.
+            # If this target is already swapped, classify its saved original.
+            target_data, _target_mode = self.store._get_entry_data(target_id)
+            manifest_record = self.store._manifest().get(target_id, {})
+            original_path = self.store.originals_dir / target_id
+            target_template = (
+                original_path.read_bytes()
+                if manifest_record and original_path.is_file()
+                else target_data
+            )
+            _target_url, target_payload, target_has_header = split_rbxh_entry(target_template)
+            if not target_has_header:
+                raise RobloxCacheError(
+                    'The selected target is not a recognized RBXH cache entry. '
+                    'No cache bytes were changed.'
+                )
+            target_kind = detect_roblox_payload_kind(target_payload)
+
+            allow_type_mismatch = source_kind != target_kind and source_kind != 'other' and target_kind != 'other'
+            if not self._confirm_type_mismatch(
+                target_id,
+                source_kind,
+                path.name,
+                target_kind=target_kind,
+            ):
                 return
+
+            animation_report = (
+                inspect_animation_payload(payload)
+                if source_kind in {'anim', 'curve-anim'}
+                else None
+            )
+            allow_suspicious_animation = False
+            if animation_report is not None and animation_report.requires_override:
+                prompt = QMessageBox(self)
+                prompt.setWindowTitle('Animation preflight warning')
+                prompt.setIcon(QMessageBox.Icon.Warning)
+                prompt.setText(
+                    'This animation contains suspicious structure, timing or numeric values.'
+                )
+                prompt.setInformativeText(
+                    animation_report.format()
+                    + '\n\nNo cache bytes have been changed yet. Importing this file anyway '
+                    'may still result in the original/default animation playing.'
+                )
+                import_anyway = prompt.addButton(
+                    'Import Anyway', QMessageBox.ButtonRole.AcceptRole
+                )
+                cancel = prompt.addButton('Cancel', QMessageBox.ButtonRole.RejectRole)
+                prompt.setDefaultButton(cancel)
+                prompt.exec()
+                if prompt.clickedButton() != import_anyway:
+                    return
+                allow_suspicious_animation = True
+
+            report_text = (
+                animation_report.format()
+                if animation_report is not None
+                else f'Detected format: {source_kind}'
+            )
             answer = QMessageBox.warning(
                 self,
                 'Confirm file import',
                 f'Use {path.name} as the payload for cache slot {target_id}?\n\n'
-                'Fleasion will retain the target URL/header, update only the payload-length field(s) '
-                'that can be verified from existing cache samples, back up the database, save the '
-                'original file, and update the target size row. If header layout cannot be proved, '
-                'the import will be refused.',
+                f'{report_text}\n\n'
+                'Fleasion will back up the database, preserve the target URL/header, update only '
+                'the verified payload-length field, write the entry and read it back to verify '
+                'the stored bytes and files.size row. This cannot guarantee Roblox will play the asset.',
                 QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
                 QMessageBox.StandardButton.Cancel,
             )
             if answer != QMessageBox.StandardButton.Yes:
                 return
-            message = self.store.import_file(target_id, path, origin=f'file {path.name}')
-            self.output.appendPlainText(message)
-            self.status_label.setText(message)
+            message = self.store.import_file(
+                target_id,
+                path,
+                origin=f'file {path.name}',
+                allow_suspicious_animation=allow_suspicious_animation,
+                allow_type_mismatch=allow_type_mismatch,
+            )
             self.refresh()
+            self.output.appendPlainText(message)
+            self.status_label.setText(message.splitlines()[0])
+            QMessageBox.information(self, 'Import write verified', message)
         except (RobloxCacheError, OSError, sqlite3.Error) as exc:
             self._show_error('File import failed', str(exc))
+
+    def _verify_selected_target(self) -> None:
+        """Read the selected target back and report whether the intended swap is still present."""
+        row = self.swaps_table.currentRow()
+        target_id = ''
+        if row >= 0:
+            item = self.swaps_table.item(row, 2)
+            if item is not None:
+                target_id = str(item.data(Qt.ItemDataRole.UserRole) or item.text()).strip().lower()
+        if not target_id:
+            target_id = self.target_edit.text().strip().lower()
+        if len(target_id) != 32:
+            self._show_error(
+                'Select a target',
+                'Select an Active Swaps row or paste a 32-character target cache ID first.',
+            )
+            return
+        try:
+            record = self.store._manifest().get(target_id, {})
+            data, storage_mode = self.store._get_entry_data(target_id)
+            url, payload, has_header = split_rbxh_entry(data)
+            db_size = self.store.database_size(target_id)
+            status = self.store.swap_status(target_id)
+            kind = detect_roblox_payload_kind(payload)
+            lines = [
+                f'Target cache ID: {target_id}',
+                f'Swap state: {status or "no saved swap"}',
+                f'Storage: {storage_mode}',
+                f'Payload type: {kind}',
+                f'RBXH header: {"valid" if has_header else "not found"}',
+                f'Header URL: {url or "(empty)"}',
+                f'Entry bytes: {len(data):,}',
+                f'files.size: {db_size}',
+                f'Saved source: {record.get("source") or "(none)"}',
+                f'Applied at: {record.get("time") or "(unknown)"}',
+            ]
+            animation_report = (
+                inspect_animation_payload(payload)
+                if kind in {'anim', 'curve-anim'}
+                else None
+            )
+            if animation_report is not None:
+                lines.extend(['', animation_report.format()])
+            if status != 'swapped':
+                lines.extend([
+                    '',
+                    'The entry no longer matches the replacement bytes saved by Fleasion. '
+                    'Roblox may have refreshed/replaced it, or another tool changed it.',
+                ])
+            if db_size != len(data):
+                lines.extend([
+                    '',
+                    'WARNING: files.size does not match the current entry size.',
+                ])
+            details = '\n'.join(lines)
+            if status == 'swapped' and has_header and db_size == len(data):
+                QMessageBox.information(self, 'Target verification', details)
+                self.status_label.setText(f'Verified {target_id[:8]}…: replacement bytes still present.')
+            else:
+                QMessageBox.warning(self, 'Target verification', details)
+                self.status_label.setText(f'Verification warning for {target_id[:8]}…: inspect the report.')
+        except (RobloxCacheError, OSError, sqlite3.Error) as exc:
+            self._show_error('Target verification failed', str(exc))
 
     def _restore_target(self) -> None:
         try:
