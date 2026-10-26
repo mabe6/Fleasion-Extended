@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any
 
 from ..utils import CONFIG_DIR
+from .animation_payload import inspect_animation_payload
 from .sqlite_browser import SQLiteBrowser, SQLiteBrowserError, _is_roblox_process_running
 
 HEX32 = re.compile(r'[0-9a-f]{32}')
@@ -800,8 +801,15 @@ class RobloxCacheStore:
         file_path: str | os.PathLike[str],
         *,
         origin: str = '',
+        allow_suspicious_animation: bool = False,
+        allow_type_mismatch: bool = False,
     ) -> str:
-        """Wrap an external payload in the target's proven RBXH header, then swap it in."""
+        """Import a raw asset with preflight, verified header metadata, and read-back checks.
+
+        Suspicious animation payloads and detected source/target kind mismatches are
+        refused by default. The GUI may pass the explicit override only after the
+        user has reviewed the warnings and chosen to continue.
+        """
         self._require_client_closed()
         self.validate()
         self._validate_entry_id(target_id)
@@ -816,9 +824,49 @@ class RobloxCacheStore:
         if payload.startswith(b'RBXH'):
             raise RobloxCacheError(
                 'The selected file appears to be a complete RBXH cache entry, not a raw asset payload. '
-                'Choose an asset file such as RBXM, PNG, mesh or audio, or select the source entry in Cache Slots.'
+                'Choose a raw asset such as RBXM/RBXMX, PNG, mesh or audio, or select the source entry in Cache Slots.'
             )
+
+        source_kind = detect_roblox_payload_kind(payload)
+        animation_report = (
+            inspect_animation_payload(payload)
+            if source_kind in {'anim', 'curve-anim'}
+            else None
+        )
+        if (
+            animation_report is not None
+            and animation_report.requires_override
+            and not allow_suspicious_animation
+        ):
+            raise RobloxCacheError(
+                'Animation preflight found suspicious data. No cache bytes were changed. '
+                'Review the report, repair/re-export the asset, or explicitly allow the import after review.\n\n'
+                + animation_report.format()
+            )
+
         target_data, _target_mode = self._get_entry_data(target_id)
+        manifest_record = self._manifest().get(target_id, {})
+        saved_original = self.originals_dir / target_id
+        template = (
+            saved_original.read_bytes()
+            if manifest_record and saved_original.is_file()
+            else target_data
+        )
+        _target_url, target_payload, _has_target_header = split_rbxh_entry(template)
+        target_kind = detect_roblox_payload_kind(target_payload)
+        if (
+            source_kind != target_kind
+            and source_kind != 'other'
+            and target_kind != 'other'
+            and not allow_type_mismatch
+        ):
+            raise RobloxCacheError(
+                f'Import type mismatch: target cache slot contains {target_kind}, '
+                f'but the selected file contains {source_kind}. Cache import does not convert '
+                'KeyframeSequence to CurveAnimation (or other formats). No cache bytes were changed. '
+                'Review the mismatch and explicitly allow it only if you intend to test this combination.'
+            )
+
         fields = self.detect_payload_length_fields()
         if not fields:
             raise RobloxCacheError(
@@ -827,21 +875,70 @@ class RobloxCacheStore:
         if self.database_size(target_id) is None:
             raise RobloxCacheError('The target has no corresponding row in rbx-storage.db.')
 
-        manifest_record = self._manifest().get(target_id, {})
-        saved_original = self.originals_dir / target_id
-        template = saved_original.read_bytes() if manifest_record and saved_original.is_file() else target_data
         wrapped_entry = _rewrite_payload_length_fields(template, payload, fields['fields'])
+        expected_url, _wrapped_payload, has_wrapped_header = split_rbxh_entry(wrapped_entry)
+        if not has_wrapped_header or _wrapped_payload != payload:
+            raise RobloxCacheError(
+                'The generated cache entry did not preserve the payload exactly; import was refused.'
+            )
         source_id = hashlib.md5(wrapped_entry).hexdigest()
 
         self.library_dir.mkdir(parents=True, exist_ok=True)
         library_path = self.library_dir / source_id
         if not library_path.exists():
             library_path.write_bytes(wrapped_entry)
-        return self.swap(
+        swap_message = self.swap(
             target_id,
             source_id,
             origin=origin or f'file {path.name}',
         )
+
+        # Verify what was really written, rather than treating a completed file write
+        # as proof that Roblox can parse or will continue using the asset.
+        try:
+            stored_data, storage_mode = self._get_entry_data(target_id)
+            stored_url, stored_payload, has_header = split_rbxh_entry(stored_data)
+            db_size = self.database_size(target_id)
+            if not has_header or stored_payload != payload:
+                raise RobloxCacheError(
+                    'Read-back verification found that the stored payload differs from the selected file.'
+                )
+            if db_size != len(stored_data):
+                raise RobloxCacheError(
+                    f'Read-back verification found files.size={db_size}, but the entry has {len(stored_data)} bytes.'
+                )
+            if stored_url != expected_url:
+                raise RobloxCacheError(
+                    f'Read-back verification found a changed cache URL: expected {expected_url!r}, got {stored_url!r}.'
+                )
+        except Exception as exc:
+            restore_message = ''
+            try:
+                restore_message = self.restore(target_id)
+            except Exception as restore_exc:
+                restore_message = f' Automatic restore also failed: {restore_exc}'
+            raise RobloxCacheError(
+                'The import write failed its read-back check; the original was restored when possible. '
+                f'{exc}{restore_message}'
+            ) from exc
+
+        verification = (
+            f'Read-back verification: OK; payload {len(stored_payload):,} bytes, '
+            f'entry {len(stored_data):,} bytes, files.size matches, storage={storage_mode}, '
+            f'URL={stored_url}.'
+        )
+        if animation_report is not None:
+            verification += (
+                f' Animation preflight: {animation_report.root_class}, '
+                f'{animation_report.curve_count if animation_report.root_class == "CurveAnimation" else animation_report.keyframe_count} '
+                f'curves/keyframes, estimated duration={animation_report.duration_seconds!s} s.'
+            )
+        verification += (
+            ' This verifies the local write only, not runtime playback. After testing, '
+            'scan the cache again: “Changed since swap” means the cache entry no longer matches '
+            'the imported bytes.'
+        )
+        return f'{swap_message}\n{verification}'
 
     def export_entry(self, entry_id: str, destination: str | os.PathLike[str]) -> Path:
         """Export raw cache bytes (from content BLOB or a physical file) and a diagnostic report."""
