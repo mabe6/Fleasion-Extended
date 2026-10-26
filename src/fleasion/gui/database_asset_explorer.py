@@ -238,21 +238,28 @@ class DatabaseAssetExplorer(QWidget):
         self.items_by_id = {}
         self._current_payload = None
         self._current_entry_id = ''
+        self._scan_note = ''
+        self.copy_id_button.setEnabled(False)
+        self.export_button.setEnabled(False)
         self.asset_table.setRowCount(0)
         self._clear_preview()
         try:
             browser = SQLiteBrowser(self.database_path)
             tables = {table.name.casefold(): table for table in browser.tables()}
             if 'files' not in tables:
-                self.status_label.setText('This database has no Roblox files table. Use Data or SQL for ordinary SQLite browsing.')
+                self._scan_note = (
+                    'This database has no Roblox files table. Use Data or SQL for ordinary SQLite browsing.'
+                )
+                self.status_label.setText(self._scan_note)
                 return False
             columns, _ddl, kind = browser.schema(tables['files'].name)
             names = {str(column['name']).casefold() for column in columns}
             if kind != 'table' or not {'id', 'content', 'size'}.issubset(names):
-                self.status_label.setText(
+                self._scan_note = (
                     'This database has no compatible files.content BLOB column. '
                     'Older file-backed entries can be inspected from Cache Slots.'
                 )
+                self.status_label.setText(self._scan_note)
                 return False
         except (SQLiteBrowserError, OSError) as exc:
             self.status_label.setText(str(exc))
@@ -325,9 +332,8 @@ class DatabaseAssetExplorer(QWidget):
         except (SQLiteBrowserError, sqlite3.Error, OSError) as exc:
             self.items = []
             self.items_by_id = {}
-            self._render_items()
             self._scan_note = f'Could not scan database assets: {exc}'
-            self.status_label.setText(self._scan_note)
+            self._render_items()
 
     def _visible_items(self) -> list[_AssetItem]:
         query = self.search_edit.text().strip().casefold()
@@ -500,8 +506,9 @@ class DatabaseAssetExplorer(QWidget):
                     'No built-in preview is available for this format. '
                     'Use Export payload… to save the raw asset bytes.'
                 )
-        except (SQLiteBrowserError, RobloxCacheError, sqlite3.Error, OSError, ValueError) as exc:
-            self._show_info(f'Preview failed: {exc}')
+        except Exception as exc:
+            # One malformed cache blob must not take down the database browser.
+            self._show_info(f'Preview failed: {type(exc).__name__}: {exc}')
 
     def _show_image(self) -> None:
         if self._current_image is None:
