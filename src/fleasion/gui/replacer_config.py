@@ -97,6 +97,21 @@ _CONFIG_MENU_BUTTON_POPUP_EXTRA_WIDTH_PX = 24
 _ID_SPLIT_RE = re.compile(r'[,\s;]+')
 
 
+
+# The HTTP interception path is not currently functional in this fork.
+# Flip this flag to True when an end-to-end HTTP proxy implementation is available.
+HTTP_PROXY_SUPPORT_AVAILABLE = False
+
+
+def _sync_http_proxy_tab_visibility(tab_widget: QTabWidget, widgets: list[QWidget]) -> None:
+    """Hide whole dashboard tabs whose primary function requires HTTP interception."""
+    visible = HTTP_PROXY_SUPPORT_AVAILABLE
+    for widget in widgets:
+        index = tab_widget.indexOf(widget)
+        if index >= 0:
+            tab_widget.setTabVisible(index, visible)
+
+
 def _ensure_text_width(widget: QWidget, minimum_width: int = 0) -> None:
     """Keep translated widget text from being clipped by legacy fixed widths."""
     widget.setMinimumWidth(max(minimum_width, widget.sizeHint().width()))
@@ -735,17 +750,34 @@ class ReplacerConfigWindow(QDialog):
         main_layout = QVBoxLayout()
         main_layout.setContentsMargins(0, 0, 0, 0)
 
-        # Create tab widget
+        # Create tab widget. Track whole tabs whose primary feature requires HTTP interception.
         self.tab_widget = QTabWidget()
+        self._http_proxy_dependent_tabs: list[QWidget] = []
 
         # Create Replacer tab
         replacer_tab = self._create_replacer_tab()
         self.tab_widget.addTab(replacer_tab, tr('ui.gui.replacer_config.replacer'))
+        self._http_proxy_dependent_tabs.append(replacer_tab)
 
         # Create Cache tab if proxy_master is available
         if self.proxy_master and hasattr(self.proxy_master, 'cache_manager'):
             cache_tab = self._create_cache_tab()
             self.tab_widget.addTab(cache_tab, tr('ui.gui.replacer_config.scraper'))
+            self._http_proxy_dependent_tabs.append(cache_tab)
+
+        # Keep all local database/cache tools together. The first inner page is
+        # Fleasion-style Active Swaps, followed by Cache Slots and the asset/SQLite browser.
+        from .local_database_editor import LocalDatabaseEditorWidget
+        from .roblox_cache_tab import RobloxCacheTab
+
+        self._local_database_editor_tab = LocalDatabaseEditorWidget(
+            embedded=True, config_manager=self.config_manager
+        )
+        self._roblox_cache_tab = RobloxCacheTab(
+            config_manager=self.config_manager,
+            additional_tab=self._local_database_editor_tab,
+        )
+        self.tab_widget.addTab(self._roblox_cache_tab, 'Local DB')
 
         # Create Modifications tab
         if self._mod_manager is not None:
@@ -780,9 +812,11 @@ class ReplacerConfigWindow(QDialog):
         self._rando_stuff_tab.selected_account_changed.connect(
             self._subplace_tab.set_selected_account
         )
+        self._subplace_joiner_gate = self._proxy_required(self._subplace_tab)
         self.tab_widget.addTab(
-            self._proxy_required(self._subplace_tab), tr('ui.gui.replacer_config.subplace_joiner')
+            self._subplace_joiner_gate, tr('ui.gui.replacer_config.subplace_joiner')
         )
+        self._http_proxy_dependent_tabs.append(self._subplace_joiner_gate)
         if self.proxy_master is not None:
             self.proxy_master.register_module_interceptor(self._subplace_tab)
             self._registered_module_interceptors.append(self._subplace_tab)
@@ -799,19 +833,27 @@ class ReplacerConfigWindow(QDialog):
             config_manager=self.config_manager,
             proxy_master=self.proxy_master,
         )
+        self._proxy_traffic_gate = self._env_proxy_required(self._proxy_traffic_tab)
         self.tab_widget.addTab(
-            self._env_proxy_required(self._proxy_traffic_tab), tr('ui.gui.replacer_config.proxy')
+            self._proxy_traffic_gate, tr('ui.gui.replacer_config.proxy')
         )
+        self._http_proxy_dependent_tabs.append(self._proxy_traffic_gate)
 
         # Create Settings tab
         from .settings_tab import SettingsTab
 
         self._settings_tab = SettingsTab(self.config_manager, system_tray=self._system_tray)
+        self._settings_tab.probe_header_visibility_changed.connect(
+            self._roblox_cache_tab.set_probe_header_enabled
+        )
         self.tab_widget.addTab(self._settings_tab, tr('ui.gui.replacer_config.settings'))
 
+        # This fork focuses on local database work rather than intercepted network traffic.
+        self.tab_widget.setCurrentWidget(self._roblox_cache_tab)
         main_layout.addWidget(self.tab_widget)
 
         self.setLayout(main_layout)
+        _sync_http_proxy_tab_visibility(self.tab_widget, self._http_proxy_dependent_tabs)
         self.set_proxy_features_enabled(self.config_manager.proxy_features_enabled)
 
         # Setup keyboard shortcuts

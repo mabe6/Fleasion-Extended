@@ -5,7 +5,7 @@ build-backend = 'uv_build'
 [project]
 name = 'fleasion'
 version = "2.4.2b1"
-description = 'Roblox asset interceptor and replacer with PyQt6 GUI'
+description = 'Fleasion desktop UI with local SQLite database inspection and editing'
 readme = 'README.md'
 requires-python = '>=3.14'
 dependencies = [
@@ -36,9 +36,9 @@ dependencies = [
 ]
 
 [project.urls]
-Repository = 'https://github.com/fleasion/Fleasion'
-Issues = 'https://github.com/fleasion/Fleasion/issues'
-Releases = 'https://github.com/fleasion/Fleasion/releases'
+Repository = 'https://github.com/mabe6/Fleasion-Extended'
+Issues = 'https://github.com/mabe6/Fleasion-Extended/issues'
+Releases = 'https://github.com/mabe6/Fleasion-Extended/releases'
 
 [project.scripts]
 fleasion = 'fleasion:main'

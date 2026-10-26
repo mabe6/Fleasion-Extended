@@ -1,0 +1,102 @@
+name: Local SQLite editor tests
+
+on:
+  push:
+    branches:
+      - CacheSwap
+    paths:
+      - ".github/workflows/local-db-tests.yml"
+      - "src/fleasion/database/**"
+      - "src/fleasion/gui/local_database_editor.py"
+      - "src/fleasion/gui/database_asset_explorer.py"
+      - "src/fleasion/gui/roblox_cache_tab.py"
+      - "src/fleasion/gui/settings_tab.py"
+      - "src/fleasion/gui/replacer_config.py"
+      - "tests/test_local_cache_ui.py"
+      - "tests/test_animation_payload.py"
+      - "tests/test_proxy_tab_visibility.py"
+      - "src/fleasion/tray.py"
+      - "src/fleasion/app.py"
+      - "src/fleasion/config/manager.py"
+      - "tests/test_sqlite_browser.py"
+      - "tests/test_database_asset_explorer.py"
+      - "tests/test_roblox_cache_store.py"
+      - "tests/test_local_database_mode.py"
+  pull_request:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/local-db-tests.yml"
+      - "src/fleasion/database/**"
+      - "src/fleasion/gui/local_database_editor.py"
+      - "src/fleasion/gui/database_asset_explorer.py"
+      - "src/fleasion/gui/roblox_cache_tab.py"
+      - "src/fleasion/gui/settings_tab.py"
+      - "src/fleasion/gui/replacer_config.py"
+      - "tests/test_local_cache_ui.py"
+      - "tests/test_animation_payload.py"
+      - "tests/test_proxy_tab_visibility.py"
+      - "tests/test_database_asset_explorer.py"
+      - "tests/test_roblox_cache_store.py"
+      - "tests/test_sqlite_browser.py"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: local-db-tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  sqlite-editor:
+    name: SQLite editor tests (Python 3.14)
+    runs-on: ubuntu-latest
+    env:
+      QT_QPA_PLATFORM: offscreen
+      PYTHONHASHSEED: "0"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # v8.2.0
+        with:
+          enable-cache: true
+
+      - name: Install Python
+        run: uv python install 3.14
+
+      - name: Install project and test dependencies
+        run: uv sync --locked --group dev
+
+      - name: Install Qt system libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libegl1 libgl1 libxkbcommon-x11-0 libxcb-cursor0
+
+      - name: Compile modified Python modules
+        run: >-
+          uv run python -m py_compile
+          src/fleasion/database/__init__.py
+          src/fleasion/database/sqlite_browser.py
+          src/fleasion/database/roblox_cache_store.py
+          src/fleasion/database/animation_payload.py
+          src/fleasion/local_database_mode.py
+          src/fleasion/gui/local_database_editor.py
+          src/fleasion/gui/database_asset_explorer.py
+          src/fleasion/gui/roblox_cache_tab.py
+          src/fleasion/gui/settings_tab.py
+          src/fleasion/gui/replacer_config.py
+          tests/test_local_cache_ui.py
+          tests/test_animation_payload.py
+          tests/test_proxy_tab_visibility.py
+          src/fleasion/tray.py
+          src/fleasion/app.py
+          src/fleasion/config/manager.py
+          tests/test_sqlite_browser.py
+          tests/test_database_asset_explorer.py
+          tests/test_roblox_cache_store.py
+          tests/test_local_database_mode.py
+
+      - name: Run local database tests
+        run: uv run pytest -q tests/test_sqlite_browser.py tests/test_database_asset_explorer.py tests/test_proxy_tab_visibility.py tests/test_local_database_mode.py tests/test_roblox_cache_store.py tests/test_local_cache_ui.py tests/test_animation_payload.py

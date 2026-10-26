@@ -252,3 +252,13 @@ desktop.ini
 # Local configuration and cache
 *.local
 .env.*
+
+# Roblox local cache data (database, WAL, SHM index, identifier and payload files)
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
+/rbx-storage.id
+/rbx-storage/
+/rbx-storage-sc/

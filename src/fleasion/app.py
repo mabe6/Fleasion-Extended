@@ -34,6 +34,7 @@ from PyQt6.QtWidgets import (
 from . import __version__
 from .config import ConfigFolderWatcher, ConfigManager
 from .localization import available_languages, set_language, tr, verbatim
+from .local_database_mode import migrate_local_database_mode
 from .modifications import ModificationManager
 from .prejsons import download_prejsons
 from .proxy import ProxyMaster, check_and_patch_running_roblox_ca
@@ -191,6 +192,8 @@ class _ForcedAcknowledgeMessageBox(QMessageBox):
 
 def _prepare_env_proxy_migration(config_manager: ConfigManager) -> bool:
     """Select Env Proxy before privilege gates and report a legacy migration."""
+    if not config_manager.proxy_features_enabled:
+        return False
     if config_manager.env_proxy_migration_v1_complete:
         return False
 
@@ -4351,6 +4354,11 @@ def main():
     # Initialize config manager before the elevation gate so the non-elevated
     # process can still build the prompt UI and show a fallback dialog.
     config_manager = ConfigManager()
+    if migrate_local_database_mode(config_manager):
+        log_buffer.log(
+            'App',
+            'Enabled local database mode by default; proxy and automatic Roblox cache deletion are off',
+        )
     set_language(config_manager.language)
     if not _suppress_dashboard and not config_manager.first_time_setup_complete:
         _prompt_first_time_language(config_manager)
@@ -4505,8 +4513,9 @@ def main():
         except Exception as exc:
             log_buffer.log('Modifications', f'Read-only guard refresh failed: {exc}')
 
-    # Re-apply saved modifications on launch so the GUI state and Roblox files stay in sync.
-    run_in_thread(mod_manager.reapply_all)()
+    # Direct Roblox-file modifications belong to optional proxy mode, not Local DB mode.
+    if config_manager.proxy_features_enabled:
+        run_in_thread(mod_manager.reapply_all)()
 
     # Shutdown guards
     # 1. Graceful Windows shutdown / log-off: Qt fires commitDataRequest before
@@ -4528,11 +4537,13 @@ def main():
     atexit.register(mod_manager.clear_managed_file_read_only)
     atexit.register(mod_manager.restore_all)
 
-    # Start PreJsons download in background
-    run_in_thread(download_prejsons)()
-
-    # Check for updates in the background
-    start_update_check()
+    # Local database mode should remain usable without background network traffic.
+    # Optional proxy mode retains its normal online preset/update checks.
+    if config_manager.proxy_features_enabled:
+        run_in_thread(download_prejsons)()
+        start_update_check()
+    else:
+        log_buffer.log('App', 'Proxy features disabled; skipped online PreJsons and update checks')
 
     # Sync launch integrations on every launch (updates if launch method changed).
     # All platforms use per-user launch entries and reconcile from the normal
