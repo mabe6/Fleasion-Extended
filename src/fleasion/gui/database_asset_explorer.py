@@ -492,6 +492,7 @@ class DatabaseAssetExplorer(QWidget):
         self.asset_table.verticalHeader().hide()
         self.asset_table.horizontalHeader().setStretchLastSection(False)
         self.asset_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
+        self.asset_table.horizontalHeader().setSortIndicator(6, Qt.SortOrder.DescendingOrder)
         self.asset_table.setColumnWidth(0, 42)
         self.asset_table.setColumnWidth(1, 230)
         self.asset_table.setColumnWidth(2, 130)
@@ -907,6 +908,15 @@ class DatabaseAssetExplorer(QWidget):
         self.asset_table.setSortingEnabled(True)
         self.asset_table.resizeRowsToContents()
 
+        if selected_id:
+            selected_row = next(
+                (
+                    row for row in range(self.asset_table.rowCount())
+                    if self.asset_table.item(row, 0) is not None
+                    and self.asset_table.item(row, 0).data(Qt.ItemDataRole.UserRole) == selected_id
+                ),
+                -1,
+            )
         if selected_row >= 0:
             self.asset_table.selectRow(selected_row)
         else:
@@ -1358,10 +1368,11 @@ class DatabaseAssetExplorer(QWidget):
             return
         self._name_resolution_inflight.update(ids)
         self._name_resolution_attempted.update(ids)
-        self._name_resolver = _AssetNameResolver(ids, self)
-        self._name_resolver.names_ready.connect(self._on_names_resolved)
-        self._name_resolver.finished.connect(self._on_name_resolver_finished)
-        self._name_resolver.start()
+        resolver = _AssetNameResolver(ids, self)
+        self._name_resolver = resolver
+        resolver.names_ready.connect(self._on_names_resolved)
+        resolver.finished.connect(lambda worker=resolver: self._on_name_resolver_finished(worker))
+        resolver.start()
 
     def _on_names_resolved(self, results: dict, processed_ids: list) -> None:
         for asset_id in processed_ids:
@@ -1387,7 +1398,9 @@ class DatabaseAssetExplorer(QWidget):
         self._save_settings()
         self._render_items()
 
-    def _on_name_resolver_finished(self) -> None:
+    def _on_name_resolver_finished(self, worker: _AssetNameResolver) -> None:
+        if self._name_resolver is not worker:
+            return
         self._name_resolver = None
         # Resolve the next batch for the same visible page when more IDs remain.
         QTimer.singleShot(100, self._resolve_current_page_names)
@@ -1399,7 +1412,7 @@ class DatabaseAssetExplorer(QWidget):
         page_items = visible[self._page_offset:self._page_offset + self._page_size()]
         self._resolve_visible_names(page_items)
 
-    def closeEvent(self, event) -> None:
+    def _shutdown_workers(self) -> None:
         if self._settings_save_timer.isActive():
             self._settings_save_timer.stop()
             self._save_settings()
@@ -1408,4 +1421,7 @@ class DatabaseAssetExplorer(QWidget):
             self._name_resolver.wait()
         self._stop_loader('_image_loader')
         self._stop_loader('_mesh_loader')
+
+    def closeEvent(self, event) -> None:
+        self._shutdown_workers()
         super().closeEvent(event)
