@@ -133,6 +133,7 @@ class DatabaseAssetExplorer(QWidget):
         self._current_payload: bytes | None = None
         self._current_entry_id = ''
         self._current_image: QImage | None = None
+        self._page_offset = 0
         self._animation_panel: Any = None
         self._model_panel: Any = None
         self._scan_note = ''
@@ -145,7 +146,7 @@ class DatabaseAssetExplorer(QWidget):
         toolbar.addWidget(QLabel('Find assets:'))
         self.search_edit = QLineEdit()
         self.search_edit.setPlaceholderText('Asset ID, cache hash, URL or format…')
-        self.search_edit.textChanged.connect(self._render_items)
+        self.search_edit.textChanged.connect(self._filters_changed)
         toolbar.addWidget(self.search_edit, 1)
 
         toolbar.addWidget(QLabel('Type:'))
@@ -153,13 +154,32 @@ class DatabaseAssetExplorer(QWidget):
         self.kind_filter.addItem('All types', 'All')
         for label in ('Animations', 'Images', 'Models', 'Audio', 'Fonts', 'Other'):
             self.kind_filter.addItem(label, label)
-        self.kind_filter.currentIndexChanged.connect(self._render_items)
+        self.kind_filter.currentIndexChanged.connect(self._filters_changed)
         toolbar.addWidget(self.kind_filter)
 
         refresh_button = QPushButton('Refresh')
         refresh_button.clicked.connect(self.refresh)
         toolbar.addWidget(refresh_button)
         root.addLayout(toolbar)
+
+        page_toolbar = QHBoxLayout()
+        page_toolbar.addWidget(QLabel('Rows/page:'))
+        self.page_size = QComboBox()
+        for size in (100, 250, 500, 1000):
+            self.page_size.addItem(str(size), size)
+        self.page_size.setCurrentText('250')
+        self.page_size.currentIndexChanged.connect(self._page_size_changed)
+        page_toolbar.addWidget(self.page_size)
+        self.prev_page_button = QPushButton('← Previous')
+        self.prev_page_button.clicked.connect(self._previous_page)
+        page_toolbar.addWidget(self.prev_page_button)
+        self.page_label = QLabel('Page 0 / 0')
+        page_toolbar.addWidget(self.page_label)
+        self.next_page_button = QPushButton('Next →')
+        self.next_page_button.clicked.connect(self._next_page)
+        page_toolbar.addWidget(self.next_page_button)
+        page_toolbar.addStretch()
+        root.addLayout(page_toolbar)
 
         splitter = QSplitter(Qt.Orientation.Horizontal)
         self.asset_table = QTableWidget(0, 5)
@@ -331,6 +351,25 @@ class DatabaseAssetExplorer(QWidget):
             self._scan_note = f'Could not scan database assets: {exc}'
             self._render_items()
 
+    def _filters_changed(self, *_args: Any) -> None:
+        self._page_offset = 0
+        self._render_items()
+
+    def _page_size_changed(self, *_args: Any) -> None:
+        self._page_offset = 0
+        self._render_items()
+
+    def _previous_page(self) -> None:
+        self._page_offset = max(0, self._page_offset - self._page_size())
+        self._render_items()
+
+    def _next_page(self) -> None:
+        self._page_offset += self._page_size()
+        self._render_items()
+
+    def _page_size(self) -> int:
+        return int(self.page_size.currentData() or 250)
+
     def _visible_items(self) -> list[_AssetItem]:
         query = self.search_edit.text().strip().casefold()
         group = str(self.kind_filter.currentData() or 'All')
@@ -349,10 +388,25 @@ class DatabaseAssetExplorer(QWidget):
     def _render_items(self, *_args: Any) -> None:
         selected_id = self._current_entry_id
         visible = self._visible_items()
+        page_size = self._page_size()
+        page_count = (len(visible) + page_size - 1) // page_size
+        if page_count:
+            self._page_offset = min(self._page_offset, (page_count - 1) * page_size)
+            current_page = self._page_offset // page_size + 1
+        else:
+            self._page_offset = 0
+            current_page = 0
+        page_items = visible[self._page_offset:self._page_offset + page_size]
+        self.prev_page_button.setEnabled(self._page_offset > 0)
+        self.next_page_button.setEnabled(self._page_offset + len(page_items) < len(visible))
+        self.page_label.setText(f'Page {current_page} / {page_count}' if page_count else 'Page 0 / 0')
         self.asset_table.setUpdatesEnabled(False)
-        self.asset_table.setRowCount(len(visible))
+        self.asset_table.blockSignals(True)
+        self.asset_table.clearSelection()
+        self.asset_table.setCurrentCell(-1, -1)
+        self.asset_table.setRowCount(len(page_items))
         selected_row = -1
-        for row_index, item in enumerate(visible):
+        for row_index, item in enumerate(page_items):
             display_id = item.asset_id or '—'
             short_id = item.entry_id[:12] + '…' if len(item.entry_id) > 12 else item.entry_id
             values = [
@@ -375,13 +429,14 @@ class DatabaseAssetExplorer(QWidget):
                 self.asset_table.setItem(row_index, column, cell)
             if item.entry_id == selected_id:
                 selected_row = row_index
+        self.asset_table.blockSignals(False)
         self.asset_table.setUpdatesEnabled(True)
         self.asset_table.resizeColumnsToContents()
         self.asset_table.setColumnWidth(0, 145)
         self.asset_table.setColumnWidth(2, 130)
         if selected_row >= 0:
             self.asset_table.selectRow(selected_row)
-        elif visible:
+        elif page_items:
             self.asset_table.selectRow(0)
         else:
             self._current_entry_id = ''
@@ -391,7 +446,12 @@ class DatabaseAssetExplorer(QWidget):
             self._clear_preview()
             self.preview_title.setText('No matching assets')
             self.preview_details.setText('Change the search text or type filter.')
-        note = f'{len(visible):,} asset(s) shown from {len(self.items):,} loaded.'
+        shown_start = self._page_offset + 1 if page_items else 0
+        shown_end = self._page_offset + len(page_items)
+        note = (
+            f'Showing {shown_start:,}–{shown_end:,} of {len(visible):,} matching assets '
+            f'({len(self.items):,} loaded).'
+        )
         if self._scan_note:
             note += f'  {self._scan_note}'
         self.status_label.setText(note)
