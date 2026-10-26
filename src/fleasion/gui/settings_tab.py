@@ -3,7 +3,7 @@
 import sys
 from pathlib import Path
 
-from PyQt6.QtCore import QEvent, Qt, QTimer
+from PyQt6.QtCore import QEvent, Qt, QTimer, pyqtSignal
 from PyQt6.QtWidgets import (
     QButtonGroup,
     QCheckBox,
@@ -107,7 +107,9 @@ class EnvProxyWarningDialog(QMessageBox):
 
 
 class SettingsTab(QWidget):
-    """Settings tab exposing all options found in the system tray Settings menu."""
+    """Settings tab for options relevant to the current Fleasion build."""
+
+    probe_header_visibility_changed = pyqtSignal(bool)
 
     def __init__(self, config_manager, system_tray=None, parent=None):
         super().__init__(parent)
@@ -144,7 +146,9 @@ class SettingsTab(QWidget):
         self._container_layout.addWidget(self._build_appearance_section())
         if sys.platform.startswith('linux'):
             self._container_layout.addWidget(self._build_linux_client_section())
-        self._container_layout.addWidget(self._build_proxy_section())
+        # HTTP interception is disabled in this local-cache-focused build, so hide
+        # the proxy transport settings instead of presenting controls that do nothing.
+        self._container_layout.addWidget(self._build_local_cache_section())
         self._container_layout.addWidget(self._build_convenience_section())
         if sys.platform == 'darwin':
             self._container_layout.addWidget(self._build_macos_auth_section())
@@ -315,6 +319,42 @@ class SettingsTab(QWidget):
         row_widget.setLayout(row)
         section.add_widget(row_widget)
         return section
+
+    # Local cache
+
+    def _build_local_cache_section(self) -> CollapsibleSection:
+        section = CollapsibleSection('Local Cache Tools', expanded=True)
+        settings = getattr(self._config, 'settings', {})
+        probe_enabled = bool(
+            settings.get('show_cache_probe_header', False)
+            if isinstance(settings, dict) else False
+        )
+        self._probe_header_tools_chk = QCheckBox(
+            'Show Probe Header button and output in Cache Slots'
+        )
+        self._probe_header_tools_chk.setChecked(probe_enabled)
+        self._probe_header_tools_chk.toggled.connect(
+            self._on_probe_header_tools_toggled
+        )
+        section.add_widget(self._probe_header_tools_chk)
+
+        note = QLabel(
+            'Disabled by default to keep the cache swap screen compact. '
+            'Enable it only when you need to inspect the cache entry header.'
+        )
+        note.setWordWrap(True)
+        note.setStyleSheet('color: #888;')
+        section.add_widget(note)
+        return section
+
+    def _on_probe_header_tools_toggled(self, enabled: bool) -> None:
+        settings = getattr(self._config, 'settings', None)
+        if isinstance(settings, dict):
+            settings['show_cache_probe_header'] = bool(enabled)
+            save = getattr(self._config, 'save', None)
+            if callable(save):
+                save()
+        self.probe_header_visibility_changed.emit(bool(enabled))
 
     # Proxy
 
