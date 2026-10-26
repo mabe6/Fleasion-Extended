@@ -6,6 +6,7 @@ import base64
 import struct
 
 from fleasion.database.animation_payload import inspect_animation_payload
+from fleasion.database.roblox_cache_store import detect_roblox_payload_kind
 
 
 def _values_and_times(keys: list[tuple[int, float]]) -> str:
@@ -55,7 +56,9 @@ def _curve_animation_xml(
 
 
 def test_curve_animation_preflight_accepts_structurally_sane_clip():
-    report = inspect_animation_payload(_curve_animation_xml())
+    payload = _curve_animation_xml()
+    assert detect_roblox_payload_kind(payload) == "curve-anim"
+    report = inspect_animation_payload(payload)
 
     assert report is not None
     assert report.root_class == "CurveAnimation"
