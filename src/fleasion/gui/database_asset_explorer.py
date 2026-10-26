@@ -19,6 +19,7 @@ from PyQt6.QtCore import Qt, QSize, QThread, QTimer, pyqtSignal
 from PyQt6.QtGui import QImage, QPixmap, QResizeEvent
 from PyQt6.QtWidgets import (
     QAbstractItemView,
+    QHeaderView,
     QApplication,
     QCheckBox,
     QFileDialog,
@@ -51,7 +52,7 @@ _MAX_ROWS = 100_000
 _NAME_RESOLUTION_BATCH = 50
 _ASSET_ID_RE = re.compile(r'(?:[?&](?:id|assetId)=|/assets/)(\d+)', re.IGNORECASE)
 _EMBEDDED_NAME_RE = re.compile(
-    r'<(?:string|Content)\\s+name=["\']Name["\']\\s*>(.*?)</(?:string|Content)>',
+    r'<(?:string|Content)\s+name=["\']Name["\']\s*>(.*?)</(?:string|Content)>',
     re.IGNORECASE | re.DOTALL,
 )
 
@@ -180,7 +181,7 @@ def _embedded_name(payload: bytes) -> str:
     if not payload:
         return ''
     data = payload
-    if data.startswith(b'\\x1f\\x8b'):
+    if data.startswith(b'\x1f\x8b'):
         try:
             data = gzip.decompress(data)
         except (OSError, EOFError):
@@ -474,7 +475,7 @@ class DatabaseAssetExplorer(QWidget):
         self.asset_table.setSortingEnabled(False)
         self.asset_table.verticalHeader().hide()
         self.asset_table.horizontalHeader().setStretchLastSection(False)
-        self.asset_table.horizontalHeader().setSectionResizeMode(1, self.asset_table.horizontalHeader().ResizeMode.Stretch)
+        self.asset_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
         self.asset_table.setColumnWidth(0, 42)
         self.asset_table.setColumnWidth(1, 230)
         self.asset_table.setColumnWidth(2, 130)
@@ -529,7 +530,7 @@ class DatabaseAssetExplorer(QWidget):
 
         self.preview_stack = QStackedWidget()
         self.info_preview = QLabel(
-            'Select an asset to preview it.\\n\\n'
+            'Select an asset to preview it.\n\n'
             'Use the type and search filters to find animations, meshes, images and other cached resources.'
         )
         self.info_preview.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -727,7 +728,7 @@ class DatabaseAssetExplorer(QWidget):
                 ).fetchone()
                 total = int(total_row[0] if total_row else 0)
                 total_size_row = connection.execute(
-                    f'SELECT COALESCE(SUM(length({quote_identifier("content")}), 0) '
+                    f'SELECT COALESCE(SUM(length({quote_identifier("content")})), 0) '
                     f'FROM {quote_identifier("files")} WHERE {quote_identifier("content")} IS NOT NULL'
                 ).fetchone()
                 total_size = int(total_size_row[0] or 0) if total_size_row else 0
@@ -870,13 +871,13 @@ class DatabaseAssetExplorer(QWidget):
             for column, value in enumerate(values):
                 cell = QTableWidgetItem(str(value))
                 cell.setToolTip(
-                    f'Name: {display_name}\\n'
-                    f'Creator: {item.creator_name or "—"}\\n'
-                    f'Asset ID: {item.asset_id or "not in cache URL"}\\n'
-                    f'Type: {_KIND_LABELS.get(item.kind, item.kind)}\\n'
-                    f'Payload size: {_format_size(item.content_size)}\\n'
-                    f'Database size: {_format_size(item.db_size)}\\n'
-                    f'Cache entry ID: {item.entry_id}\\n'
+                    f'Name: {display_name}\n'
+                    f'Creator: {item.creator_name or "—"}\n'
+                    f'Asset ID: {item.asset_id or "not in cache URL"}\n'
+                    f'Type: {_KIND_LABELS.get(item.kind, item.kind)}\n'
+                    f'Payload size: {_format_size(item.content_size)}\n'
+                    f'Database size: {_format_size(item.db_size)}\n'
+                    f'Cache entry ID: {item.entry_id}\n'
                     f'URL: {item.url or "not stored in RBXH header"}'
                 )
                 cell.setData(Qt.ItemDataRole.UserRole, item.entry_id)
@@ -957,7 +958,7 @@ class DatabaseAssetExplorer(QWidget):
         if item.hits is not None:
             detail.append(f'Cache hits: {item.hits}')
         detail.append(f'Last accessed: {_format_atime(item.atime)}')
-        self.preview_details.setText('\\n'.join(detail))
+        self.preview_details.setText('\n'.join(detail))
         self._load_preview(item)
 
     def _stop_loader(self, attribute: str) -> None:
@@ -1192,7 +1193,7 @@ class DatabaseAssetExplorer(QWidget):
     @staticmethod
     def _is_json_payload(payload: bytes) -> bool:
         data = payload
-        if data.startswith(b'\\x1f\\x8b'):
+        if data.startswith(b'\x1f\x8b'):
             try:
                 data = gzip.decompress(data)
             except (OSError, EOFError):
@@ -1207,7 +1208,7 @@ class DatabaseAssetExplorer(QWidget):
 
     def _load_json_preview(self, payload: bytes) -> None:
         data = payload
-        if data.startswith(b'\\x1f\\x8b'):
+        if data.startswith(b'\x1f\x8b'):
             data = gzip.decompress(data)
         parsed: Any = None
         for encoding in ('utf-8', 'utf-16', 'utf-16-le', 'utf-16-be'):
@@ -1236,7 +1237,7 @@ class DatabaseAssetExplorer(QWidget):
             if text.lstrip().startswith('<'):
                 pretty = xml.dom.minidom.parseString(text).toprettyxml(indent='  ')
                 lines = [line for line in pretty.splitlines() if line.strip()]
-                return '\\n'.join(lines[:1000])
+                return '\n'.join(lines[:1000])
         except Exception:
             pass
         return text[:20000] if text else 'Empty payload.'
@@ -1372,6 +1373,15 @@ class DatabaseAssetExplorer(QWidget):
 
     def _on_name_resolver_finished(self) -> None:
         self._name_resolver = None
+        # Resolve the next batch for the same visible page when more IDs remain.
+        QTimer.singleShot(100, self._resolve_current_page_names)
+
+    def _resolve_current_page_names(self) -> None:
+        if not self.items:
+            return
+        visible = self._visible_items()
+        page_items = visible[self._page_offset:self._page_offset + self._page_size()]
+        self._resolve_visible_names(page_items)
 
     def closeEvent(self, event) -> None:
         if self._settings_save_timer.isActive():
