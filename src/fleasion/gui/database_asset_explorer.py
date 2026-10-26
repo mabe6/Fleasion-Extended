@@ -50,6 +50,7 @@ _SAMPLE_BYTES = 8192
 _MAX_PREVIEW_BYTES = 50 * 1024 * 1024
 _MAX_ROWS = 100_000
 _NAME_RESOLUTION_BATCH = 50
+_MAX_NAME_RESOLUTION = 20_000
 _ASSET_ID_RE = re.compile(r'(?:[?&](?:id|assetId)=|/assets/)(\d+)', re.IGNORECASE)
 _EMBEDDED_NAME_RE = re.compile(
     r'<(?:string|Content)\s+name=["\']Name["\']\s*>(.*?)</(?:string|Content)>',
@@ -301,7 +302,7 @@ class _CheckListPopup(QMenu):
 class _AssetNameResolver(QThread):
     """Resolve public Roblox asset names in the background, never on the UI thread."""
 
-    names_ready = pyqtSignal(dict, list)
+    names_ready = pyqtSignal(dict, list, bool)
 
     def __init__(self, asset_ids: list[str], parent=None):
         super().__init__(parent)
@@ -313,8 +314,9 @@ class _AssetNameResolver(QThread):
 
     def run(self) -> None:
         found: dict[str, dict[str, str]] = {}
+        failed = False
         if not self.asset_ids or self._stop_requested:
-            self.names_ready.emit(found, self.asset_ids)
+            self.names_ready.emit(found, self.asset_ids, False)
             return
 
         try:
@@ -343,13 +345,17 @@ class _AssetNameResolver(QThread):
                 if self._stop_requested:
                     break
                 batch = self.asset_ids[start:start + _NAME_RESOLUTION_BATCH]
-                response = session.get(
-                    'https://develop.roblox.com/v1/assets',
-                    params={'assetIds': ','.join(batch)},
-                    timeout=8,
-                )
-                response.raise_for_status()
-                body = response.json()
+                try:
+                    response = session.get(
+                        'https://develop.roblox.com/v1/assets',
+                        params={'assetIds': ','.join(batch)},
+                        timeout=3,
+                    )
+                    response.raise_for_status()
+                    body = response.json()
+                except Exception:
+                    failed = True
+                    break
                 for entry in body.get('data', []):
                     asset_id = str(entry.get('id') or '')
                     name = str(entry.get('name') or '').strip()
@@ -371,8 +377,8 @@ class _AssetNameResolver(QThread):
                     self.msleep(120)
         except Exception:
             # Many cache entries have no public asset ID or Roblox may reject name lookup.
-            pass
-        self.names_ready.emit(found, self.asset_ids)
+            failed = True
+        self.names_ready.emit(found, self.asset_ids, failed)
 
 
 class DatabaseAssetExplorer(QWidget):
@@ -397,6 +403,7 @@ class DatabaseAssetExplorer(QWidget):
         self._name_cache = self._load_name_cache()
         self._name_resolution_attempted: set[str] = set()
         self._name_resolution_inflight: set[str] = set()
+        self._name_resolution_disabled = False
         self._name_resolver: _AssetNameResolver | None = None
         self._image_loader: QThread | None = None
         self._mesh_loader: QThread | None = None
@@ -1355,17 +1362,30 @@ class DatabaseAssetExplorer(QWidget):
             QMessageBox.warning(self, 'Export failed', str(exc))
 
     def _resolve_visible_names(self, visible_items: list[_AssetItem]) -> None:
+        if self._name_resolution_disabled:
+            return
+        if len(self._name_resolution_attempted) >= _MAX_NAME_RESOLUTION:
+            return
         if self._name_resolver is not None and self._name_resolver.isRunning():
             return
-        ids = [
-            item.asset_id
-            for item in visible_items
-            if item.asset_id
-            and item.asset_id not in self._name_cache
-            and item.asset_id not in self._name_resolution_attempted
-            and item.asset_id not in self._name_resolution_inflight
-        ]
-        ids = list(dict.fromkeys(ids))[:_NAME_RESOLUTION_BATCH]
+
+        # Prioritise the displayed page, then gradually resolve other entries too.
+        ordered_items = list(visible_items)
+        visible_entry_ids = {item.entry_id for item in visible_items}
+        ordered_items.extend(item for item in self.items if item.entry_id not in visible_entry_ids)
+        ids = []
+        for item in ordered_items:
+            asset_id = item.asset_id
+            if (
+                asset_id
+                and asset_id not in self._name_cache
+                and asset_id not in self._name_resolution_attempted
+                and asset_id not in self._name_resolution_inflight
+                and asset_id not in ids
+            ):
+                ids.append(asset_id)
+            if len(ids) >= _NAME_RESOLUTION_BATCH:
+                break
         if not ids:
             return
         self._name_resolution_inflight.update(ids)
@@ -1376,9 +1396,16 @@ class DatabaseAssetExplorer(QWidget):
         resolver.finished.connect(lambda worker=resolver: self._on_name_resolver_finished(worker))
         resolver.start()
 
-    def _on_names_resolved(self, results: dict, processed_ids: list) -> None:
+    def _on_names_resolved(self, results: dict, processed_ids: list, failed: bool) -> None:
         for asset_id in processed_ids:
             self._name_resolution_inflight.discard(str(asset_id))
+        if failed:
+            self._name_resolution_disabled = True
+            self._scan_note = (
+                'Roblox name lookup is unavailable; showing detected names, asset IDs and cache hashes.'
+            )
+            self.status_label.setText(self._scan_note)
+            return
         if not results:
             return
         for asset_id, metadata in results.items():
