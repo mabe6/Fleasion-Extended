@@ -130,11 +130,9 @@ def _as_bytes(value: Any) -> bytes | None:
     if isinstance(value, memoryview):
         return value.tobytes()
     if isinstance(value, str):
-        try:
-            return value.encode("latin-1")
-        except UnicodeEncodeError:
-            # Some RBXM property readers decode a valid UTF-8 binary string to str.
-            return value.encode("utf-8")
+        # The current RBXM deserializer returns str only after a successful UTF-8
+        # decode, so UTF-8 re-encoding preserves those original bytes.
+        return value.encode("utf-8")
     return None
 
 
