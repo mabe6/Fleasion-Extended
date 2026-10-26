@@ -146,6 +146,7 @@ def test_blob_cache_import_wraps_payload_and_updates_db_content(tmp_path, monkey
     url, recovered_payload, has_header = split_rbxh_entry(wrapped)
 
     assert "database" in message
+    assert "Read-back verification: OK" in message
     assert has_header is True
     assert url == "https://example.test/?id=111"
     assert recovered_payload == payload
@@ -244,6 +245,51 @@ def test_import_refuses_to_guess_header_layout_from_too_few_entries(tmp_path, mo
         store.import_file(target_id, import_file, allow_suspicious_animation=True)
 
     assert store._entry_path(target_id).read_bytes().endswith(b"T" * 350)
+
+
+def test_import_refuses_unparseable_animation_without_explicit_override(tmp_path, monkeypatch):
+    target_id = "a" * 32
+    target_original = _make_entry("https://example.test/?id=111", b"T" * 350)
+    store = _make_store(tmp_path, monkeypatch, {
+        target_id: target_original,
+        "b" * 32: _make_entry("https://example.test/?id=222", b"B" * 360),
+        "c" * 32: _make_entry("https://example.test/?id=333", b"C" * 370),
+    })
+    import_file = tmp_path / "malformed-animation.rbxm"
+    import_file.write_bytes(b"<roblox!" + b"CurveAnimation" + b"truncated")
+
+    with pytest.raises(RobloxCacheError, match="Animation preflight found suspicious data"):
+        store.import_file(target_id, import_file)
+
+    assert store._entry_path(target_id).read_bytes() == target_original
+    assert target_id not in store._manifest()
+
+
+def test_import_refuses_curve_animation_into_legacy_sequence_without_override(
+    tmp_path, monkeypatch
+):
+    target_id = "a" * 32
+    target_original = _make_entry(
+        "https://example.test/?id=111",
+        b"<roblox!" + b"KeyframeSequence" + b"T" * 350,
+    )
+    store = _make_store(tmp_path, monkeypatch, {
+        target_id: target_original,
+        "b" * 32: _make_entry("https://example.test/?id=222", b"B" * 360),
+        "c" * 32: _make_entry("https://example.test/?id=333", b"C" * 370),
+    })
+    import_file = tmp_path / "curve-animation.rbxm"
+    import_file.write_bytes(b"<roblox!" + b"CurveAnimation" + b"not-a-complete-file")
+
+    with pytest.raises(RobloxCacheError, match="Import type mismatch"):
+        store.import_file(
+            target_id,
+            import_file,
+            allow_suspicious_animation=True,
+        )
+
+    assert store._entry_path(target_id).read_bytes() == target_original
+    assert target_id not in store._manifest()
 
 
 def test_swap_is_blocked_while_roblox_process_is_detected(tmp_path, monkeypatch):
