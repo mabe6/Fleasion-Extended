@@ -396,7 +396,7 @@ class DatabaseAssetExplorer(QWidget):
         self._current_request_id = ''
         self._page_offset = 0
         self._scan_note = ''
-        self._active_kinds = self._load_setting_set('local_db_asset_kinds', set())
+        self._active_kinds = self._load_setting_set('local_db_asset_kinds', set()) & set(_KIND_ORDER)
         self._active_search_fields = self._load_setting_set(
             'local_db_search_fields', _DEFAULT_SEARCH_FIELDS
         )
@@ -656,7 +656,7 @@ class DatabaseAssetExplorer(QWidget):
         self._render_items()
 
     def _update_filter_buttons(self) -> None:
-        if not self._active_kinds:
+        if not self._active_kinds or self._active_kinds.issuperset(_KIND_ORDER):
             kind_label = 'All types'
         elif len(self._active_kinds) == 1:
             kind_label = _KIND_LABELS.get(next(iter(self._active_kinds)), '1 type')
@@ -834,7 +834,11 @@ class DatabaseAssetExplorer(QWidget):
         query = self.search_edit.text().strip().casefold()
         result = []
         for item in self.items:
-            if self._active_kinds and item.kind not in self._active_kinds:
+            if (
+                self._active_kinds
+                and not self._active_kinds.issuperset(_KIND_ORDER)
+                and item.kind not in self._active_kinds
+            ):
                 continue
             if query:
                 if not self._active_search_fields:
