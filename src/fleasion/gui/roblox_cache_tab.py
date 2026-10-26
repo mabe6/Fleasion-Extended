@@ -164,8 +164,6 @@ class RobloxCacheTab(QWidget):
         self.status_label.setWordWrap(True)
         swaps_layout.addWidget(self.status_label)
 
-        self.set_probe_header_enabled(self._probe_header_enabled)
-
         self.pages.addTab(self.swaps_page, 'Active Swaps')
 
         # Cache inventory remains available in a separate compact page. Selecting a
