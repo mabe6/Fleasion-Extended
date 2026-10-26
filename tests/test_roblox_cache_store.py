@@ -141,7 +141,9 @@ def test_blob_cache_import_wraps_payload_and_updates_db_content(tmp_path, monkey
     payload = b"<roblox!" + b"custom CurveAnimation payload" * 12
     payload_path.write_bytes(payload)
 
-    message = store.import_file(\n        target_id, payload_path, origin="blob import fixture", allow_suspicious_animation=True\n    )
+    message = store.import_file(
+        target_id, payload_path, origin="blob import fixture", allow_suspicious_animation=True
+    )
     wrapped = store._get_entry_data(target_id)[0]
     url, recovered_payload, has_header = split_rbxh_entry(wrapped)
 
@@ -220,7 +222,9 @@ def test_external_file_import_requires_verified_header_layout_and_syncs_size(tmp
     payload = b"<roblox!" + b"custom CurveAnimation payload" * 12
     import_file.write_bytes(payload)
 
-    result = store.import_file(\n        target_id, import_file, origin="test animation", allow_suspicious_animation=True\n    )
+    result = store.import_file(
+        target_id, import_file, origin="test animation", allow_suspicious_animation=True
+    )
     current = store._entry_path(target_id).read_bytes()
     url, current_payload, has_header = split_rbxh_entry(current)
 
