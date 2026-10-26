@@ -251,7 +251,9 @@ def inspect_animation_payload(payload: bytes) -> AnimationPayloadInspection | No
     """
     stripped = payload.lstrip(b"\xef\xbb\xbf \t\r\n")
     looks_binary = payload.startswith(b"<roblox!")
-    looks_xml = stripped.startswith(b"<roblox")
+    looks_xml = stripped.startswith(b"<roblox") or (
+        stripped.startswith(b"<?xml") and b"<roblox" in stripped[:1024]
+    )
 
     if not (looks_binary or looks_xml):
         return None
