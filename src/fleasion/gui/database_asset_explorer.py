@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from PyQt6.QtCore import Qt, QSize
-from PyQt6.QtGui import QImage, QPixmap
+from PyQt6.QtGui import QImage, QPixmap, QResizeEvent
 from PyQt6.QtWidgets import (
     QAbstractItemView,
     QApplication,
@@ -40,7 +40,7 @@ from ..database.sqlite_browser import SQLiteBrowser, SQLiteBrowserError, quote_i
 _SAMPLE_BYTES = 2048
 _MAX_PREVIEW_BYTES = 50 * 1024 * 1024
 _MAX_ROWS = 100_000
-_ASSET_ID_RE = re.compile(r'(?:[?&](?:id|assetId)=|/assets/(\d+))', re.IGNORECASE)
+_ASSET_ID_RE = re.compile(r'(?:[?&](?:id|assetId)=|/assets/)(\d+)', re.IGNORECASE)
 
 
 @dataclass(frozen=True)
@@ -137,8 +137,9 @@ class DatabaseAssetExplorer(QWidget):
         self._current_payload: bytes | None = None
         self._current_entry_id = ''
         self._current_image: QImage | None = None
-        self._animation_panel: QWidget | None = None
-        self._model_panel: QWidget | None = None
+        self._animation_panel: Any = None
+        self._model_panel: Any = None
+        self._scan_note = ''
         self._build_ui()
 
     def _build_ui(self) -> None:
@@ -318,19 +319,16 @@ class DatabaseAssetExplorer(QWidget):
             self.items_by_id = {item.entry_id: item for item in loaded}
             self._render_items()
             if total > _MAX_ROWS:
-                self.status_label.setText(
-                    f'Loaded {_MAX_ROWS:,} of {total:,} embedded assets. '
-                    'Narrow the cache in Cache Slots if you need entries beyond this limit.'
-                )
+                self._scan_note = f'Loaded {_MAX_ROWS:,} of {total:,} embedded assets; older rows may be omitted.'
             else:
-                self.status_label.setText(
-                    f'Found {total:,} embedded cache entries. Select a row for a preview; the database remains read-only.'
-                )
+                self._scan_note = f'{total:,} embedded assets loaded.'
+            self._render_items()
         except (SQLiteBrowserError, sqlite3.Error, OSError) as exc:
             self.items = []
             self.items_by_id = {}
             self._render_items()
-            self.status_label.setText(f'Could not scan database assets: {exc}')
+            self._scan_note = f'Could not scan database assets: {exc}'
+            self.status_label.setText(self._scan_note)
 
     def _visible_items(self) -> list[_AssetItem]:
         query = self.search_edit.text().strip().casefold()
@@ -392,9 +390,10 @@ class DatabaseAssetExplorer(QWidget):
             self._clear_preview()
             self.preview_title.setText('No matching assets')
             self.preview_details.setText('Change the search text or type filter.')
-        self.status_label.setText(
-            f'{len(visible):,} asset(s) shown from {len(self.items):,} loaded.'
-        )
+        note = f'{len(visible):,} asset(s) shown from {len(self.items):,} loaded.'
+        if self._scan_note:
+            note += f'  {self._scan_note}'
+        self.status_label.setText(note)
 
     def _selected_item(self) -> _AssetItem | None:
         row = self.asset_table.currentRow()
@@ -432,6 +431,8 @@ class DatabaseAssetExplorer(QWidget):
     def _load_preview(self, item: _AssetItem) -> None:
         self._current_payload = None
         self._current_image = None
+        if self._animation_panel is not None:
+            self._animation_panel.clear_animation()
         try:
             if item.content_size > _MAX_PREVIEW_BYTES:
                 self._clear_preview()
@@ -522,7 +523,7 @@ class DatabaseAssetExplorer(QWidget):
         )
         self.image_preview.setPixmap(pixmap)
 
-    def resizeEvent(self, event) -> None:
+    def resizeEvent(self, event: QResizeEvent) -> None:
         super().resizeEvent(event)
         if self.preview_stack.currentWidget() is self.image_preview:
             self._scale_image()
@@ -534,6 +535,7 @@ class DatabaseAssetExplorer(QWidget):
         self.preview_stack.setCurrentWidget(self.info_preview)
 
     def _clear_preview(self) -> None:
+        self._current_payload = None
         self._current_image = None
         self.image_preview.clear()
         if self._animation_panel is not None:
