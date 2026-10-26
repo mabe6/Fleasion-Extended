@@ -9,6 +9,8 @@ from pathlib import Path
 from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import (
     QAbstractItemView,
+    QComboBox,
+    QGroupBox,
     QHeaderView,
     QFileDialog,
     QHBoxLayout,
@@ -84,6 +86,27 @@ class RobloxCacheTab(QWidget):
         swaps_layout = QVBoxLayout(self.swaps_page)
         swaps_layout.setContentsMargins(6, 6, 6, 6)
         swaps_layout.setSpacing(6)
+
+        filters_group = QGroupBox('Filters')
+        filters_layout = QHBoxLayout(filters_group)
+        filters_layout.setContentsMargins(8, 5, 8, 5)
+        filters_layout.addWidget(QLabel('Search:'))
+        self.swap_filter_edit = QLineEdit()
+        self.swap_filter_edit.setPlaceholderText(
+            'Swap name, target cache ID, replacement ID or date'
+        )
+        self.swap_filter_edit.textChanged.connect(self._render_active_swaps)
+        filters_layout.addWidget(self.swap_filter_edit, 1)
+        filters_layout.addWidget(QLabel('Status:'))
+        self.swap_status_filter = QComboBox()
+        self.swap_status_filter.addItem('All swaps', 'all')
+        self.swap_status_filter.addItem('Active only', 'active')
+        self.swap_status_filter.addItem('Changed since swap', 'changed')
+        self.swap_status_filter.currentIndexChanged.connect(self._render_active_swaps)
+        filters_layout.addWidget(self.swap_status_filter)
+        self.swap_count_label = QLabel('0 swaps')
+        filters_layout.addWidget(self.swap_count_label)
+        swaps_layout.addWidget(filters_group)
 
         active_group = QWidget()
         active_layout = QVBoxLayout(active_group)
@@ -349,13 +372,36 @@ class RobloxCacheTab(QWidget):
             key=lambda pair: str(pair[1].get('time') or ''),
             reverse=True,
         )
-        self.swaps_table.setUpdatesEnabled(False)
-        self.swaps_table.setRowCount(0)
+        query = self.swap_filter_edit.text().strip().casefold()
+        status_filter = self.swap_status_filter.currentData()
+        visible_records = []
         for target_id, record in records:
-            row = self.swaps_table.rowCount()
-            self.swaps_table.insertRow(row)
             status = self.store.swap_status(target_id)
             status_label = 'Active' if status == 'swapped' else 'Changed since swap'
+            haystack = ' '.join((
+                str(record.get('origin') or 'Local cache swap'),
+                target_id,
+                str(record.get('source') or ''),
+                str(record.get('time') or ''),
+                status_label,
+            )).casefold()
+            if query and query not in haystack:
+                continue
+            if status_filter == 'active' and status != 'swapped':
+                continue
+            if status_filter == 'changed' and status == 'swapped':
+                continue
+            visible_records.append((target_id, record, status, status_label))
+
+        self.swap_count_label.setText(
+            f'{len(visible_records):,} / {len(records):,} swaps'
+            if query or status_filter != 'all' else f'{len(records):,} swaps'
+        )
+        self.swaps_table.setUpdatesEnabled(False)
+        self.swaps_table.setRowCount(0)
+        for target_id, record, status, status_label in visible_records:
+            row = self.swaps_table.rowCount()
+            self.swaps_table.insertRow(row)
             values = [
                 status_label,
                 str(record.get('origin') or 'Local cache swap'),
