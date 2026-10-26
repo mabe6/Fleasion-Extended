@@ -317,7 +317,6 @@ class DatabaseAssetExplorer(QWidget):
                     )
             self.items = loaded
             self.items_by_id = {item.entry_id: item for item in loaded}
-            self._render_items()
             if total > _MAX_ROWS:
                 self._scan_note = f'Loaded {_MAX_ROWS:,} of {total:,} embedded assets; older rows may be omitted.'
             else:
