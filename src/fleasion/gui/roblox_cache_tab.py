@@ -9,6 +9,7 @@ from pathlib import Path
 from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import (
     QAbstractItemView,
+    QHeaderView,
     QFileDialog,
     QHBoxLayout,
     QLabel,
@@ -18,6 +19,7 @@ from PyQt6.QtWidgets import (
     QPushButton,
     QTableWidget,
     QTableWidgetItem,
+    QTabWidget,
     QVBoxLayout,
     QWidget,
 )
@@ -46,7 +48,13 @@ def _format_size(value: int | None) -> str:
 class RobloxCacheTab(QWidget):
     """Browse local rbx-storage entries, replace a whole slot and restore originals."""
 
-    def __init__(self, parent: QWidget | None = None, *, config_manager=None):
+    def __init__(
+        self,
+        parent: QWidget | None = None,
+        *,
+        config_manager=None,
+        additional_tab: QWidget | None = None,
+    ):
         super().__init__(parent)
         self.config_manager = config_manager
         self.store = RobloxCacheStore()
@@ -58,6 +66,8 @@ class RobloxCacheTab(QWidget):
             if isinstance(settings, dict) else False
         )
         self._build_ui()
+        if additional_tab is not None:
+            self.pages.addTab(additional_tab, 'Asset Database')
         self._render_active_swaps()
 
     def _build_ui(self) -> None:
@@ -93,7 +103,7 @@ class RobloxCacheTab(QWidget):
         self.swaps_table.verticalHeader().hide()
         self.swaps_table.horizontalHeader().setStretchLastSection(False)
         self.swaps_table.horizontalHeader().setSectionResizeMode(
-            1, self.swaps_table.horizontalHeader().ResizeMode.Stretch
+            1, QHeaderView.ResizeMode.Stretch
         )
         self.swaps_table.setColumnWidth(0, 125)
         self.swaps_table.setColumnWidth(2, 250)
@@ -375,6 +385,7 @@ class RobloxCacheTab(QWidget):
             self.entries = []
             self.entries_by_id = {}
             self._render_entries()
+            self._render_active_swaps()
             self.status_label.setText(str(exc))
             return
         self._render_entries()
