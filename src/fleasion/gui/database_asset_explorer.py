@@ -153,6 +153,21 @@ def _asset_id_from_url(url: str) -> str:
     return next((value for value in match.groups() if value), '')
 
 
+def _kind_group(kind: str) -> str:
+    """Return a human-readable high-level group for a detected payload."""
+    if kind in {'anim', 'curve-anim'}:
+        return 'Animations'
+    if kind in _IMAGE_KINDS:
+        return 'Images'
+    if kind in _MODEL_KINDS:
+        return 'Models'
+    if kind in _AUDIO_KINDS:
+        return 'Audio'
+    if kind == 'font':
+        return 'Fonts'
+    return 'Other'
+
+
 def _format_size(value: int | None) -> str:
     if value is None:
         return '—'
@@ -1333,7 +1348,7 @@ class DatabaseAssetExplorer(QWidget):
             item.asset_id
             for item in visible_items
             if item.asset_id
-            and not item.name
+            and item.asset_id not in self._name_cache
             and item.asset_id not in self._name_resolution_attempted
             and item.asset_id not in self._name_resolution_inflight
         ]
@@ -1389,7 +1404,7 @@ class DatabaseAssetExplorer(QWidget):
             self._save_settings()
         if self._name_resolver is not None and self._name_resolver.isRunning():
             self._name_resolver.stop()
-            self._name_resolver.wait(1500)
+            self._name_resolver.wait()
         self._stop_loader('_image_loader')
         self._stop_loader('_mesh_loader')
         super().closeEvent(event)
