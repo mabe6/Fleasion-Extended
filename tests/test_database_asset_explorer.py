@@ -1,0 +1,72 @@
+"""Tests for the local database asset explorer."""
+
+from __future__ import annotations
+
+import os
+import subprocess
+import sys
+
+from fleasion.gui.database_asset_explorer import _asset_id_from_url, _detect_kind, _kind_group
+
+
+def test_asset_kind_recognizes_readable_animation_and_image_formats() -> None:
+    kind, url = _detect_kind(
+        b'<roblox version="4"><Item class="KeyframeSequence"></Item></roblox>'
+    )
+    assert kind == 'anim'
+    assert url == ''
+
+    kind, url = _detect_kind(b'\x89PNG\r\n\x1a\n' + b'payload')
+    assert kind == 'png'
+    assert url == ''
+
+
+def test_asset_url_extraction_and_type_groups() -> None:
+    assert _asset_id_from_url('https://www.roblox.com/asset/?id=123456') == '123456'
+    assert _asset_id_from_url('https://example.invalid/assets/789') == '789'
+    assert _kind_group('anim') == 'Animations'
+    assert _kind_group('curve-anim') == 'Animations'
+    assert _kind_group('png') == 'Images'
+    assert _kind_group('other') == 'Other'
+
+
+def test_asset_explorer_scans_filters_and_previews_database_rows_offscreen() -> None:
+    code = r"""
+import sqlite3
+import tempfile
+from pathlib import Path
+from PyQt6.QtWidgets import QApplication
+from fleasion.gui.database_asset_explorer import DatabaseAssetExplorer
+
+app = QApplication([])
+with tempfile.TemporaryDirectory() as folder:
+    path = Path(folder) / 'rbx-storage.db'
+    payload = b'\x89PNG\r\n\x1a\n' + bytes(64)
+    with sqlite3.connect(path) as connection:
+        connection.execute(
+            'CREATE TABLE files (id BLOB PRIMARY KEY, content BLOB, size INTEGER NOT NULL, category INTEGER, hits INTEGER, atime INTEGER)'
+        )
+        connection.execute(
+            'INSERT INTO files (id, content, size, category, hits, atime) VALUES (?, ?, ?, ?, ?, ?)',
+            (bytes.fromhex('01' * 16), payload, len(payload), 1, 3, 100),
+        )
+        connection.execute(
+            'INSERT INTO files (id, content, size, category, hits, atime) VALUES (?, ?, ?, ?, ?, ?)',
+            (bytes.fromhex('02' * 16), b'unknown-payload', 15, 2, 1, 50),
+        )
+
+    widget = DatabaseAssetExplorer()
+    assert widget.set_database(path) is True
+    assert len(widget.items) == 2
+    assert widget.items_by_id['01' * 16].kind == 'png'
+    widget.kind_filter.setCurrentIndex(widget.kind_filter.findData('Images'))
+    assert widget.asset_table.rowCount() == 1
+    widget.search_edit.setText('01010101')
+    assert widget.asset_table.rowCount() == 1
+    widget.search_edit.setText('no-such-asset')
+    assert widget.asset_table.rowCount() == 0
+    widget.close()
+"""
+    env = os.environ.copy()
+    env['QT_QPA_PLATFORM'] = 'offscreen'
+    subprocess.run([sys.executable, '-c', code], check=True, env=env)
