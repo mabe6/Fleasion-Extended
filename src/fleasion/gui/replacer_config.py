@@ -765,19 +765,19 @@ class ReplacerConfigWindow(QDialog):
             self.tab_widget.addTab(cache_tab, tr('ui.gui.replacer_config.scraper'))
             self._http_proxy_dependent_tabs.append(cache_tab)
 
-        # Local SQLite editor: independent of proxy availability and usable offline.
+        # Keep all local database/cache tools together. The first inner page is
+        # Fleasion-style Active Swaps, followed by Cache Slots and the asset/SQLite browser.
         from .local_database_editor import LocalDatabaseEditorWidget
+        from .roblox_cache_tab import RobloxCacheTab
 
         self._local_database_editor_tab = LocalDatabaseEditorWidget(
             embedded=True, config_manager=self.config_manager
         )
-        self.tab_widget.addTab(self._local_database_editor_tab, 'Local DB')
-
-        # Local cache slots are edited directly on disk, independent of the proxy.
-        from .roblox_cache_tab import RobloxCacheTab
-
-        self._roblox_cache_tab = RobloxCacheTab()
-        self.tab_widget.addTab(self._roblox_cache_tab, 'Cache Slots')
+        self._roblox_cache_tab = RobloxCacheTab(
+            config_manager=self.config_manager,
+            additional_tab=self._local_database_editor_tab,
+        )
+        self.tab_widget.addTab(self._roblox_cache_tab, 'Local DB')
 
         # Create Modifications tab
         if self._mod_manager is not None:
@@ -843,10 +843,13 @@ class ReplacerConfigWindow(QDialog):
         from .settings_tab import SettingsTab
 
         self._settings_tab = SettingsTab(self.config_manager, system_tray=self._system_tray)
+        self._settings_tab.probe_header_visibility_changed.connect(
+            self._roblox_cache_tab.set_probe_header_enabled
+        )
         self.tab_widget.addTab(self._settings_tab, tr('ui.gui.replacer_config.settings'))
 
         # This fork focuses on local database work rather than intercepted network traffic.
-        self.tab_widget.setCurrentWidget(self._local_database_editor_tab)
+        self.tab_widget.setCurrentWidget(self._roblox_cache_tab)
         main_layout.addWidget(self.tab_widget)
 
         self.setLayout(main_layout)
