@@ -23,7 +23,22 @@ def _curve_animation_xml(
     *,
     ticks: tuple[int, int] = (0, 14400),
     z_values: tuple[float, float] = (0.0, 0.5),
+    include_arm_track: bool = True,
 ) -> bytes:
+    arm_track = f"""
+      <Item class="Folder">
+        <Properties><string name="Name">RightUpperArm</string></Properties>
+        <Item class="EulerRotationCurve">
+          <Properties><string name="Name">Rotation</string></Properties>
+          <Item class="FloatCurve">
+            <Properties>
+              <string name="Name">X</string>
+              <BinaryString name="ValuesAndTimes">{_values_and_times(list(zip(ticks, (0.0, 0.5))))}</BinaryString>
+            </Properties>
+          </Item>
+        </Item>
+      </Item>
+""" if include_arm_track else ""
     return f"""<?xml version="1.0" encoding="utf-8"?>
 <roblox version="4">
   <Item class="CurveAnimation">
@@ -49,6 +64,7 @@ def _curve_animation_xml(
           </Item>
         </Item>
       </Item>
+      {arm_track}
     </Item>
   </Item>
 </roblox>
@@ -66,9 +82,12 @@ def test_curve_animation_preflight_accepts_structurally_sane_clip():
     assert report.loop is True
     assert report.priority == "Action4"
     assert report.rig_data_present is True
-    assert report.curve_count == 1
+    assert report.curve_count == 2
     assert report.duration_seconds == 1.0
-    assert report.joint_paths == ("HumanoidRootPart", "HumanoidRootPart/LowerTorso")
+    assert report.joint_paths == (
+        "HumanoidRootPart/LowerTorso",
+        "HumanoidRootPart/RightUpperArm",
+    )
     assert report.findings == ()
 
 
@@ -83,6 +102,14 @@ def test_curve_animation_preflight_flags_extreme_position_and_tiny_duration():
     assert any("extreme value" in finding for finding in report.findings)
     assert any("extremely short" in finding for finding in report.findings)
     assert "Warnings requiring your review:" in report.format()
+
+
+def test_curve_animation_warns_when_wave_has_no_arm_or_hand_tracks():
+    report = inspect_animation_payload(_curve_animation_xml(include_arm_track=False))
+
+    assert report is not None
+    assert report.joint_paths == ("HumanoidRootPart/LowerTorso",)
+    assert any("No arm, hand, or shoulder" in finding for finding in report.findings)
 
 
 def test_malformed_animation_marker_does_not_look_like_a_clean_import():
