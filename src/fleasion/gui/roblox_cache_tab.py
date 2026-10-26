@@ -361,7 +361,7 @@ class RobloxCacheTab(QWidget):
         self.table.setColumnWidth(0, 270)
         self.table.setColumnWidth(8, 400)
 
-    def _render_active_swaps(self) -> None:
+    def _render_active_swaps(self, *_args) -> None:
         """Render saved swap state in the same list-first style as Fleasion profiles."""
         try:
             manifest = self.store._manifest()
