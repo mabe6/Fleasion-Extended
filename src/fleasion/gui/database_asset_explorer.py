@@ -9,7 +9,6 @@ import json
 import re
 import sqlite3
 import tempfile
-import time
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -335,7 +334,7 @@ class _AssetNameResolver(QThread):
             try:
                 cookie = _get_roblosecurity()
                 if cookie:
-                    session.cookies.set('.ROBLOSECURITY', cookie)
+                    session.cookies.set('.ROBLOSECURITY', cookie, domain='.roblox.com')
             except Exception:
                 # Names are optional; never make the local browser depend on browser-cookie access.
                 pass
@@ -412,6 +411,9 @@ class DatabaseAssetExplorer(QWidget):
         self._settings_save_timer.setSingleShot(True)
         self._settings_save_timer.setInterval(350)
         self._settings_save_timer.timeout.connect(self._save_settings)
+        app = QApplication.instance()
+        if app is not None:
+            app.aboutToQuit.connect(self._shutdown_workers)
 
     def _settings(self) -> dict:
         settings = getattr(self.config_manager, 'settings', None)
