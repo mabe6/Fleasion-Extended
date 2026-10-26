@@ -30,6 +30,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+from .database_asset_explorer import DatabaseAssetExplorer
 from ..database.sqlite_browser import (
     MAX_QUERY_ROWS,
     SQLiteBrowser,
@@ -135,6 +136,8 @@ class LocalDatabaseEditorWidget(QWidget):
         splitter.addWidget(left)
 
         self.tabs = QTabWidget()
+        self.asset_explorer = DatabaseAssetExplorer(self.tabs)
+        self.tabs.addTab(self.asset_explorer, 'Asset Explorer')
         splitter.addWidget(self.tabs)
         splitter.setSizes([290, 890])
 
@@ -346,15 +349,27 @@ class LocalDatabaseEditorWidget(QWidget):
             item.setToolTip(table.sql or table.name)
             self.table_list.addItem(item)
         self.table_list.blockSignals(False)
+        asset_database_supported = self.asset_explorer.set_database(browser.path)
         if tables:
-            self.table_list.setCurrentRow(0)
-            self._load_table(tables[0].name, tables[0].kind)
+            preferred_index = next(
+                (
+                    index for index, table in enumerate(tables)
+                    if table.name.casefold() == "files" and table.kind == "table"
+                ),
+                0,
+            )
+            self.table_list.setCurrentRow(preferred_index)
+            self._load_table(tables[preferred_index].name, tables[preferred_index].kind)
+            self.tabs.setCurrentWidget(
+                self.asset_explorer if asset_database_supported else self.data_tab
+            )
         else:
             self.current_table = ""
             self.data_grid.clear()
             self.data_grid.setRowCount(0)
             self.data_grid.setColumnCount(0)
             self.status_label.setText(f"Opened {browser.path}; no tables or views found.")
+            self.tabs.setCurrentWidget(self.data_tab)
         self.status_label.setText(
             f"Opened read-only: {browser.path} — {len(tables)} table(s)/view(s)."
         )
