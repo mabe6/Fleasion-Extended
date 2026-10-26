@@ -312,7 +312,13 @@ def inspect_animation_payload(payload: bytes) -> AnimationPayloadInspection | No
         for node, ancestors in scoped:
             if node.class_name == "Folder":
                 folder_name = _as_text(_value(node, "Name"))
-                if folder_name:
+                # Only call a folder an animated joint when it owns transform
+                # curves, rather than listing every organizational folder.
+                has_transform_curves = any(
+                    child.class_name in {"Vector3Curve", "EulerRotationCurve", "RotationCurve"}
+                    for child in node.children
+                )
+                if folder_name and has_transform_curves:
                     path_parts = [
                         _as_text(_value(parent, "Name"))
                         for parent in ancestors
@@ -377,7 +383,16 @@ def inspect_animation_payload(payload: bytes) -> AnimationPayloadInspection | No
                 "workflows reject the clip."
             )
         if not joint_paths:
-            findings.append("No named joint folders were found under CurveAnimation.")
+            findings.append("No named joint folders with transform curves were found under CurveAnimation.")
+        elif not any(
+            token in path.casefold()
+            for path in joint_paths
+            for token in ("arm", "hand", "shoulder")
+        ):
+            findings.append(
+                "No arm, hand, or shoulder transform curves were found. If this file is intended "
+                "to replace a wave gesture, the arm-waving motion appears to be absent from the asset."
+            )
     else:
         keyframe_times: list[float] = []
         for node, ancestors in scoped:
