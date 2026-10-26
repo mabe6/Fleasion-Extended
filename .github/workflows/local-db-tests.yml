@@ -25,7 +25,9 @@ on:
       - ".github/workflows/local-db-tests.yml"
       - "src/fleasion/database/**"
       - "src/fleasion/gui/local_database_editor.py"
+      - "src/fleasion/gui/database_asset_explorer.py"
       - "src/fleasion/gui/roblox_cache_tab.py"
+      - "tests/test_database_asset_explorer.py"
       - "tests/test_roblox_cache_store.py"
       - "tests/test_sqlite_browser.py"
 
@@ -57,6 +59,11 @@ jobs:
 
       - name: Install project and test dependencies
         run: uv sync --locked --group dev
+
+      - name: Install Qt system libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libegl1 libgl1 libxkbcommon-x11-0 libxcb-cursor0
 
       - name: Compile modified Python modules
         run: >-
