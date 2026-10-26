@@ -46,15 +46,133 @@ def _format_size(value: int | None) -> str:
 class RobloxCacheTab(QWidget):
     """Browse local rbx-storage entries, replace a whole slot and restore originals."""
 
-    def __init__(self, parent: QWidget | None = None):
+    def __init__(self, parent: QWidget | None = None, *, config_manager=None):
         super().__init__(parent)
+        self.config_manager = config_manager
         self.store = RobloxCacheStore()
         self.entries: list[RobloxCacheEntry] = []
         self.entries_by_id: dict[str, RobloxCacheEntry] = {}
+        settings = getattr(config_manager, 'settings', {})
+        self._probe_header_enabled = bool(
+            settings.get('show_cache_probe_header', False)
+            if isinstance(settings, dict) else False
+        )
         self._build_ui()
+        self._render_active_swaps()
 
     def _build_ui(self) -> None:
         root = QVBoxLayout(self)
+        root.setContentsMargins(4, 4, 4, 4)
+        root.setSpacing(5)
+
+        self.pages = QTabWidget()
+        root.addWidget(self.pages, 1)
+
+        # First page follows Fleasion's original profile editor: active swaps above,
+        # editable IDs below. Users can paste cache-entry IDs directly.
+        self.swaps_page = QWidget()
+        swaps_layout = QVBoxLayout(self.swaps_page)
+        swaps_layout.setContentsMargins(6, 6, 6, 6)
+        swaps_layout.setSpacing(6)
+
+        active_group = QWidget()
+        active_layout = QVBoxLayout(active_group)
+        active_layout.setContentsMargins(0, 0, 0, 0)
+        active_layout.setSpacing(3)
+        active_layout.addWidget(QLabel('Active Swaps'))
+
+        self.swaps_table = QTableWidget(0, 5)
+        self.swaps_table.setHorizontalHeaderLabels(
+            ['Status', 'Swap Name', 'Target Cache ID', 'Replacement Cache ID', 'Applied']
+        )
+        self.swaps_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.swaps_table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self.swaps_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.swaps_table.setAlternatingRowColors(True)
+        self.swaps_table.setSortingEnabled(False)
+        self.swaps_table.verticalHeader().hide()
+        self.swaps_table.horizontalHeader().setStretchLastSection(False)
+        self.swaps_table.horizontalHeader().setSectionResizeMode(
+            1, self.swaps_table.horizontalHeader().ResizeMode.Stretch
+        )
+        self.swaps_table.setColumnWidth(0, 125)
+        self.swaps_table.setColumnWidth(2, 250)
+        self.swaps_table.setColumnWidth(3, 250)
+        self.swaps_table.setColumnWidth(4, 145)
+        self.swaps_table.itemDoubleClicked.connect(self._load_selected_swap)
+        active_layout.addWidget(self.swaps_table, 1)
+        swaps_layout.addWidget(active_group, 1)
+
+        edit_group = QWidget()
+        edit_layout = QVBoxLayout(edit_group)
+        edit_layout.setContentsMargins(0, 0, 0, 0)
+        edit_layout.setSpacing(4)
+        edit_layout.addWidget(QLabel('Add / Edit Swap'))
+
+        name_row = QHBoxLayout()
+        name_row.addWidget(QLabel('Swap name:'))
+        self.swap_name_edit = QLineEdit()
+        self.swap_name_edit.setPlaceholderText('Optional label, e.g. Replace idle animation')
+        name_row.addWidget(self.swap_name_edit, 1)
+        edit_layout.addLayout(name_row)
+
+        ids_row = QHBoxLayout()
+        ids_row.addWidget(QLabel('Target cache ID:'))
+        self.target_edit = QLineEdit()
+        self.target_edit.setPlaceholderText('Paste the 32-character cache ID to replace')
+        self.target_edit.setClearButtonEnabled(True)
+        ids_row.addWidget(self.target_edit, 1)
+        ids_row.addWidget(QLabel('Replace with:'))
+        self.source_edit = QLineEdit()
+        self.source_edit.setPlaceholderText('Paste the 32-character replacement cache ID')
+        self.source_edit.setClearButtonEnabled(True)
+        ids_row.addWidget(self.source_edit, 1)
+        edit_layout.addLayout(ids_row)
+
+        actions = QHBoxLayout()
+        self.swap_button = QPushButton('Apply / Update Swap')
+        self.swap_button.clicked.connect(self._swap_selected_entries)
+        actions.addWidget(self.swap_button)
+        load_button = QPushButton('Load Selected')
+        load_button.clicked.connect(self._load_selected_swap)
+        actions.addWidget(load_button)
+        restore_button = QPushButton('Restore Selected')
+        restore_button.clicked.connect(self._restore_selected_swap)
+        actions.addWidget(restore_button)
+        restore_all_button = QPushButton('Restore All')
+        restore_all_button.clicked.connect(self._restore_all)
+        actions.addWidget(restore_all_button)
+        clear_button = QPushButton('Clear Fields')
+        clear_button.clicked.connect(self._clear_swap_fields)
+        actions.addWidget(clear_button)
+        self.probe_button = QPushButton('Probe Header')
+        self.probe_button.clicked.connect(self._probe_header)
+        actions.addWidget(self.probe_button)
+        edit_layout.addLayout(actions)
+        swaps_layout.addWidget(edit_group)
+
+        self.status_label = QLabel(
+            'Local cache mode. Close Roblox Player / Studio before applying or restoring a swap.'
+        )
+        self.status_label.setWordWrap(True)
+        swaps_layout.addWidget(self.status_label)
+
+        self.output = QPlainTextEdit()
+        self.output.setReadOnly(True)
+        self.output.setPlaceholderText('Operation details and optional header-probe output.')
+        self.output.setMaximumBlockCount(500)
+        self.output.setMaximumHeight(100)
+        swaps_layout.addWidget(self.output)
+        self.set_probe_header_enabled(self._probe_header_enabled)
+
+        self.pages.addTab(self.swaps_page, 'Active Swaps')
+
+        # Cache inventory remains available in a separate compact page. Selecting a
+        # row can fill either of the ID fields above.
+        self.entries_page = QWidget()
+        entries_layout = QVBoxLayout(self.entries_page)
+        entries_layout.setContentsMargins(6, 6, 6, 6)
+        entries_layout.setSpacing(5)
 
         path_row = QHBoxLayout()
         path_row.addWidget(QLabel('Roblox cache root:'))
@@ -64,18 +182,18 @@ class RobloxCacheTab(QWidget):
         browse_button = QPushButton('Browse…')
         browse_button.clicked.connect(self._browse_root)
         path_row.addWidget(browse_button)
-        refresh_button = QPushButton('Scan cache')
+        refresh_button = QPushButton('Scan Cache')
         refresh_button.clicked.connect(self.refresh)
         path_row.addWidget(refresh_button)
-        root.addLayout(path_row)
+        entries_layout.addLayout(path_row)
 
         search_row = QHBoxLayout()
         search_row.addWidget(QLabel('Filter:'))
         self.search_edit = QLineEdit()
-        self.search_edit.setPlaceholderText('Entry ID, asset ID, type or URL')
+        self.search_edit.setPlaceholderText('Cache ID, asset ID, type or URL')
         self.search_edit.textChanged.connect(self._render_entries)
         search_row.addWidget(self.search_edit, 1)
-        root.addLayout(search_row)
+        entries_layout.addLayout(search_row)
 
         self.table = QTableWidget(0, 9)
         self.table.setHorizontalHeaderLabels(
@@ -86,63 +204,62 @@ class RobloxCacheTab(QWidget):
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.table.setAlternatingRowColors(True)
         self.table.setSortingEnabled(False)
+        self.table.verticalHeader().hide()
         self.table.horizontalHeader().setStretchLastSection(True)
-        self.table.itemDoubleClicked.connect(lambda _item: self._set_selected_as_target())
-        root.addWidget(self.table, 1)
+        self.table.itemDoubleClicked.connect(self._set_selected_as_target)
+        entries_layout.addWidget(self.table, 1)
 
-        target_row = QHBoxLayout()
-        target_row.addWidget(QLabel('Target slot:'))
-        self.target_edit = QLineEdit()
-        self.target_edit.setPlaceholderText('32-character cache entry ID to replace')
-        target_row.addWidget(self.target_edit, 1)
-        set_target = QPushButton('Selected → target')
+        inventory_actions = QHBoxLayout()
+        set_target = QPushButton('Selected → target ID')
         set_target.clicked.connect(self._set_selected_as_target)
-        target_row.addWidget(set_target)
-        root.addLayout(target_row)
-
-        source_row = QHBoxLayout()
-        source_row.addWidget(QLabel('Source entry:'))
-        self.source_edit = QLineEdit()
-        self.source_edit.setPlaceholderText('32-character source entry ID')
-        source_row.addWidget(self.source_edit, 1)
-        set_source = QPushButton('Selected → source')
+        inventory_actions.addWidget(set_target)
+        set_source = QPushButton('Selected → replacement ID')
         set_source.clicked.connect(self._set_selected_as_source)
-        source_row.addWidget(set_source)
-        root.addLayout(source_row)
-
-        actions = QHBoxLayout()
-        self.swap_button = QPushButton('Swap source → target')
-        self.swap_button.clicked.connect(self._swap_selected_entries)
-        actions.addWidget(self.swap_button)
-        import_button = QPushButton('Import file → target…')
+        inventory_actions.addWidget(set_source)
+        import_button = QPushButton('Import File → Target…')
         import_button.clicked.connect(self._import_file)
-        actions.addWidget(import_button)
-        restore_button = QPushButton('Restore target')
-        restore_button.clicked.connect(self._restore_target)
-        actions.addWidget(restore_button)
-        restore_all_button = QPushButton('Restore ALL')
-        restore_all_button.clicked.connect(self._restore_all)
-        actions.addWidget(restore_all_button)
-        export_button = QPushButton('Export entry…')
+        inventory_actions.addWidget(import_button)
+        export_button = QPushButton('Export Entry…')
         export_button.clicked.connect(self._export_selected)
-        actions.addWidget(export_button)
-        probe_button = QPushButton('Probe header')
-        probe_button.clicked.connect(self._probe_header)
-        actions.addWidget(probe_button)
-        root.addLayout(actions)
+        inventory_actions.addWidget(export_button)
+        inventory_actions.addStretch(1)
+        entries_layout.addLayout(inventory_actions)
 
-        self.status_label = QLabel(
-            'Local mode: no proxy traffic is required. Scan the cache folder to begin.'
-        )
-        self.status_label.setWordWrap(True)
-        root.addWidget(self.status_label)
+        self.pages.addTab(self.entries_page, 'Cache Slots')
 
-        self.output = QPlainTextEdit()
-        self.output.setReadOnly(True)
-        self.output.setPlaceholderText('Operation details and header-probe output appear here.')
-        self.output.setMaximumBlockCount(500)
-        self.output.setMaximumHeight(145)
-        root.addWidget(self.output)
+    def set_probe_header_enabled(self, enabled: bool) -> None:
+        """Show or hide the optional header-probe controls to save vertical space."""
+        self._probe_header_enabled = bool(enabled)
+        if hasattr(self, 'probe_button'):
+            self.probe_button.setVisible(self._probe_header_enabled)
+        if hasattr(self, 'output'):
+            self.output.setVisible(self._probe_header_enabled)
+
+    def _clear_swap_fields(self) -> None:
+        self.swap_name_edit.clear()
+        self.target_edit.clear()
+        self.source_edit.clear()
+
+    def _load_selected_swap(self, *_args) -> None:
+        row = self.swaps_table.currentRow()
+        if row < 0:
+            return
+        target_item = self.swaps_table.item(row, 2)
+        source_item = self.swaps_table.item(row, 3)
+        name_item = self.swaps_table.item(row, 1)
+        if target_item is not None:
+            self.target_edit.setText(str(target_item.data(Qt.ItemDataRole.UserRole) or target_item.text()))
+        if source_item is not None:
+            self.source_edit.setText(str(source_item.data(Qt.ItemDataRole.UserRole) or source_item.text()))
+        if name_item is not None:
+            self.swap_name_edit.setText(name_item.text())
+
+    def _restore_selected_swap(self) -> None:
+        if self.swaps_table.currentRow() < 0:
+            self._show_error('Select a swap', 'Select an active swap row first.')
+            return
+        self._load_selected_swap()
+        self._restore_target()
 
     def _browse_root(self) -> None:
         folder = QFileDialog.getExistingDirectory(
@@ -211,6 +328,43 @@ class RobloxCacheTab(QWidget):
         self.table.setColumnWidth(0, 270)
         self.table.setColumnWidth(8, 400)
 
+    def _render_active_swaps(self) -> None:
+        """Render saved swap state in the same list-first style as Fleasion profiles."""
+        try:
+            manifest = self.store._manifest()
+        except (OSError, ValueError):
+            manifest = {}
+        records = sorted(
+            manifest.items(),
+            key=lambda pair: str(pair[1].get('time') or ''),
+            reverse=True,
+        )
+        self.swaps_table.setUpdatesEnabled(False)
+        self.swaps_table.setRowCount(0)
+        for target_id, record in records:
+            row = self.swaps_table.rowCount()
+            self.swaps_table.insertRow(row)
+            status = self.store.swap_status(target_id)
+            status_label = 'Active' if status == 'swapped' else 'Changed since swap'
+            values = [
+                status_label,
+                str(record.get('origin') or 'Local cache swap'),
+                target_id,
+                str(record.get('source') or ''),
+                str(record.get('time') or '—'),
+            ]
+            for column, value in enumerate(values):
+                item = QTableWidgetItem(value)
+                item.setToolTip(value)
+                item.setFlags(Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable)
+                if column == 2:
+                    item.setData(Qt.ItemDataRole.UserRole, target_id)
+                elif column == 3:
+                    item.setData(Qt.ItemDataRole.UserRole, str(record.get('source') or ''))
+                self.swaps_table.setItem(row, column, item)
+        self.swaps_table.setUpdatesEnabled(True)
+        self.swaps_table.resizeRowsToContents()
+
     def refresh(self) -> None:
         root = self.root_edit.text().strip().strip('"')
         try:
@@ -224,6 +378,7 @@ class RobloxCacheTab(QWidget):
             self.status_label.setText(str(exc))
             return
         self._render_entries()
+        self._render_active_swaps()
         active_swaps = sum(bool(entry.swap_status) for entry in self.entries)
         self.status_label.setText(
             f'Scanned {len(self.entries):,} cache entry/entries. '
@@ -265,6 +420,8 @@ class RobloxCacheTab(QWidget):
     def _swap_selected_entries(self) -> None:
         try:
             target_id, source_id = self._selected_pair()
+            if not self.entries_by_id:
+                self.refresh()
             if len(source_id) != 32:
                 raise RobloxCacheError('Enter a 32-character source entry ID.')
             target = self.entries_by_id.get(target_id)
@@ -286,7 +443,8 @@ class RobloxCacheTab(QWidget):
             )
             if answer != QMessageBox.StandardButton.Yes:
                 return
-            message = self.store.swap(target_id, source_id, origin='Fleasion Local Cache tab')
+            swap_name = self.swap_name_edit.text().strip() or 'Local cache swap'
+            message = self.store.swap(target_id, source_id, origin=swap_name)
             self.output.appendPlainText(message)
             self.status_label.setText(message)
             self.refresh()
