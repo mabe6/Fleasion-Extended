@@ -69,9 +69,16 @@ class LocalDatabaseEditorWidget(QWidget):
 
     PAGE_SIZES = (25, 50, 100, 250, 500, 1000)
 
-    def __init__(self, parent: QWidget | None = None, *, embedded: bool = False):
+    def __init__(
+        self,
+        parent: QWidget | None = None,
+        *,
+        embedded: bool = False,
+        config_manager=None,
+    ):
         super().__init__(parent)
         self.embedded = embedded
+        self.config_manager = config_manager
         self.setWindowFlag(Qt.WindowType.Window, not embedded)
         self.setWindowTitle("Local SQLite Database Editor — Fleasion Extended")
         self.resize(1180, 760)
@@ -136,7 +143,7 @@ class LocalDatabaseEditorWidget(QWidget):
         splitter.addWidget(left)
 
         self.tabs = QTabWidget()
-        self.asset_explorer = DatabaseAssetExplorer(self.tabs)
+        self.asset_explorer = DatabaseAssetExplorer(self.tabs, config_manager=self.config_manager)
         self.tabs.addTab(self.asset_explorer, 'Asset Explorer')
         splitter.addWidget(self.tabs)
         splitter.setSizes([290, 890])
