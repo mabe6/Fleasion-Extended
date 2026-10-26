@@ -126,7 +126,11 @@ def detect_roblox_payload_kind(payload: bytes) -> str:
         return 'ogg'
     if payload[:3] == b'ID3' or payload[:2] == b'\xff\xfb':
         return 'mp3'
-    if payload[:6] == b'<roblox':
+    if payload.lstrip().startswith(b'<roblox'):
+        if b'CurveAnimation' in payload:
+            return 'curve-anim'
+        if b'KeyframeSequence' in payload:
+            return 'anim'
         return 'xml'
     if payload[:1] in (b'{', b'['):
         return 'json'
