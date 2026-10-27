@@ -1,5 +1,5 @@
 > [!IMPORTANT]
-> **Fleasion-Extended is an unofficial community fork of [Fleasion](https://github.com/fleasion/Fleasion).** This branch defaults to local SQLite database inspection and editing. Proxy interception is disabled by default; the upstream proxy functionality has been patched, and no confirmed ETA for an upstream fix is available.
+> **Fleasion-db is an unofficial community fork of [Fleasion](https://github.com/fleasion/Fleasion).** This branch defaults to local SQLite database inspection and editing. Proxy interception is disabled by default; the upstream proxy functionality has been patched, and no confirmed ETA for an upstream fix is available.
 >
 > The local database editor is independent of the proxy. It opens SQLite files read-only first, supports table browsing and SQL queries, and creates a verified backup before any enabled write. It does not guarantee that Roblox will accept arbitrary database edits.
 
