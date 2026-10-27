@@ -262,11 +262,31 @@ def test_import_refuses_unparseable_animation_without_explicit_override(tmp_path
     import_file = tmp_path / "malformed-animation.rbxm"
     import_file.write_bytes(b"<roblox!" + b"CurveAnimation" + b"truncated")
 
+    # Strict mode is still available to callers that ask for it
     with pytest.raises(RobloxCacheError, match="Animation preflight found suspicious data"):
-        store.import_file(target_id, import_file)
+        store.import_file(target_id, import_file, allow_suspicious_animation=False)
 
     assert store._entry_path(target_id).read_bytes() == target_original
     assert target_id not in store._manifest()
+
+
+def test_import_defaults_to_warning_and_still_writes_flagged_animation(tmp_path, monkeypatch):
+    target_id = "a" * 32
+    target_original = _make_entry("https://example.test/?id=111", b"T" * 350)
+    store = _make_store(tmp_path, monkeypatch, {
+        target_id: target_original,
+        "b" * 32: _make_entry("https://example.test/?id=222", b"B" * 360),
+        "c" * 32: _make_entry("https://example.test/?id=333", b"C" * 370),
+    })
+    import_file = tmp_path / "malformed-animation.rbxm"
+    payload = b"<roblox!" + b"CurveAnimation" + b"truncated"
+    import_file.write_bytes(payload)
+
+    message = store.import_file(target_id, import_file)
+
+    assert "Preflight warnings (imported anyway)" in message
+    assert target_id in store._manifest()
+    assert store._entry_path(target_id).read_bytes().endswith(payload)
 
 
 def test_import_refuses_curve_animation_into_legacy_sequence_without_override(

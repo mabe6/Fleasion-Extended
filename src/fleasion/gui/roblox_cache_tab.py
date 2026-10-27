@@ -578,28 +578,8 @@ class RobloxCacheTab(QWidget):
                 if source_kind in {'anim', 'curve-anim'}
                 else None
             )
-            allow_suspicious_animation = False
-            if animation_report is not None and animation_report.requires_override:
-                prompt = QMessageBox(self)
-                prompt.setWindowTitle('Animation preflight warning')
-                prompt.setIcon(QMessageBox.Icon.Warning)
-                prompt.setText(
-                    'This animation contains suspicious structure, timing or numeric values.'
-                )
-                prompt.setInformativeText(
-                    animation_report.format()
-                    + '\n\nNo cache bytes have been changed yet. Importing this file anyway '
-                    'may still result in the original/default animation playing.'
-                )
-                import_anyway = prompt.addButton(
-                    'Import Anyway', QMessageBox.ButtonRole.AcceptRole
-                )
-                cancel = prompt.addButton('Cancel', QMessageBox.ButtonRole.RejectRole)
-                prompt.setDefaultButton(cancel)
-                prompt.exec()
-                if prompt.clickedButton() != import_anyway:
-                    return
-                allow_suspicious_animation = True
+            # Preflight findings are shown as a warning in the confirmation below, never as a block
+            allow_suspicious_animation = True
 
             report_text = (
                 animation_report.format()
@@ -611,7 +591,13 @@ class RobloxCacheTab(QWidget):
                 'Confirm file import',
                 f'Use {path.name} as the payload for cache slot {target_id}?\n\n'
                 f'{report_text}\n\n'
-                'Fleasion will back up the database, preserve the target URL/header, update only '
+                + (
+                    'Warnings above do not stop the import: the file will be written as it is, '
+                    'and a damaged animation may play wrongly or not at all.\n\n'
+                    if animation_report is not None and animation_report.requires_override
+                    else ''
+                )
+                + 'Fleasion will back up the database, preserve the target URL/header, update only '
                 'the verified payload-length field, write the entry and read it back to verify '
                 'the stored bytes and files.size row. This cannot guarantee Roblox will play the asset.',
                 QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,

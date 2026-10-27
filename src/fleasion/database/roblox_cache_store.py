@@ -804,14 +804,15 @@ class RobloxCacheStore:
         file_path: str | os.PathLike[str],
         *,
         origin: str = '',
-        allow_suspicious_animation: bool = False,
+        allow_suspicious_animation: bool = True,
         allow_type_mismatch: bool = False,
     ) -> str:
         """Import a raw asset with preflight, verified header metadata, and read-back checks.
 
-        Suspicious animation payloads and detected source/target kind mismatches are
-        refused by default. The GUI may pass the explicit override only after the
-        user has reviewed the warnings and chosen to continue.
+        Animation preflight findings are reported as warnings and the import still
+        proceeds; pass ``allow_suspicious_animation=False`` to refuse them instead.
+        Detected source/target kind mismatches are refused unless the caller passes
+        ``allow_type_mismatch=True`` after the user has confirmed.
         """
         self._require_client_closed()
         self.validate()
@@ -935,6 +936,11 @@ class RobloxCacheStore:
                 f' Animation preflight: {animation_report.root_class}, '
                 f'{animation_report.curve_count if animation_report.root_class == "CurveAnimation" else animation_report.keyframe_count} '
                 f'curves/keyframes, estimated duration={animation_report.duration_seconds!s} s.'
+            )
+        if animation_report is not None and animation_report.findings:
+            verification += (
+                ' Preflight warnings (imported anyway): '
+                + ' '.join(animation_report.findings)
             )
         if animation_report is not None and animation_report.advisories:
             verification += ' Advisory notes: ' + ' '.join(animation_report.advisories)
