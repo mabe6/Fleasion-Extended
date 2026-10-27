@@ -100,8 +100,12 @@ def test_curve_animation_preflight_flags_extreme_position_and_tiny_duration():
     assert report.duration_seconds is not None
     assert abs(report.duration_seconds - (1 / 600)) < 1e-12
     assert any("extreme value" in finding for finding in report.findings)
-    assert any("extremely short" in finding for finding in report.findings)
+    # A short duration is advisory only, but the extreme value still blocks
+    assert any("very short" in note for note in report.advisories)
+    assert not any("short" in finding for finding in report.findings)
+    assert report.requires_override
     assert "Warnings requiring your review:" in report.format()
+    assert "advisory only" in report.format()
 
 
 def test_curve_animation_warns_when_wave_has_no_arm_or_hand_tracks():
@@ -109,7 +113,9 @@ def test_curve_animation_warns_when_wave_has_no_arm_or_hand_tracks():
 
     assert report is not None
     assert report.joint_paths == ("HumanoidRootPart/LowerTorso",)
-    assert any("No arm, hand, or shoulder" in finding for finding in report.findings)
+    assert any("No arm, hand, or shoulder" in note for note in report.advisories)
+    # Heuristics alone must not block an otherwise readable animation
+    assert not report.requires_override
 
 
 def test_malformed_animation_marker_does_not_look_like_a_clean_import():

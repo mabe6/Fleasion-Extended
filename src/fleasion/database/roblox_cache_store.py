@@ -936,6 +936,8 @@ class RobloxCacheStore:
                 f'{animation_report.curve_count if animation_report.root_class == "CurveAnimation" else animation_report.keyframe_count} '
                 f'curves/keyframes, estimated duration={animation_report.duration_seconds!s} s.'
             )
+        if animation_report is not None and animation_report.advisories:
+            verification += ' Advisory notes: ' + ' '.join(animation_report.advisories)
         verification += (
             ' This verifies the local write only, not runtime playback. After testing, '
             'scan the cache again: “Changed since swap” means the cache entry no longer matches '

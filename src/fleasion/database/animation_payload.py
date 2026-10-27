@@ -47,9 +47,11 @@ class AnimationPayloadInspection:
     rig_data_present: bool = False
     joint_paths: tuple[str, ...] = ()
     findings: tuple[str, ...] = ()
+    advisories: tuple[str, ...] = ()
 
     @property
     def requires_override(self) -> bool:
+        """Only findings (damaged or unreadable data) block an import; advisories never do."""
         return bool(self.findings)
 
     @property
@@ -94,6 +96,10 @@ class AnimationPayloadInspection:
         else:
             lines.append("")
             lines.append("No obvious structural or numeric problem was detected.")
+        if self.advisories:
+            lines.append("")
+            lines.append("Notes (advisory only, these do not block the import):")
+            lines.extend(f"• {note}" for note in self.advisories)
         lines.append("")
         lines.append(
             "This inspection checks the file data only. It cannot prove that Roblox's "
@@ -300,6 +306,7 @@ def inspect_animation_payload(payload: bytes) -> AnimationPayloadInspection | No
         priority = _as_text(priority_value)
 
     findings: list[str] = []
+    advisories: list[str] = []
     joint_paths: list[str] = []
     duration_seconds: float | None = None
     curve_count = 0
@@ -373,23 +380,24 @@ def inspect_animation_payload(payload: bytes) -> AnimationPayloadInspection | No
         if duration_seconds is None or duration_seconds <= 0:
             findings.append("The animation has no positive-duration curve data.")
         elif duration_seconds < 0.1:
-            findings.append(
-                f"The parsed duration is extremely short ({duration_seconds:.6g} s); "
-                "the clip may be effectively a still frame."
+            advisories.append(
+                f"The estimated duration is very short ({duration_seconds:.6g} s). Fleasion "
+                "assumes 14400 time ticks per second, so check the preview speed if this "
+                "clip is meant to be longer."
             )
         if not rig_data_present:
-            findings.append(
-                "No AnimationRigData instance was found. This can make some emote/import "
-                "workflows reject the clip."
+            advisories.append(
+                "No AnimationRigData instance was found. Some emote/import "
+                "workflows may reject the clip."
             )
         if not joint_paths:
-            findings.append("No named joint folders with transform curves were found under CurveAnimation.")
+            advisories.append("No named joint folders with transform curves were found under CurveAnimation.")
         elif not any(
             token in path.casefold()
             for path in joint_paths
             for token in ("arm", "hand", "shoulder")
         ):
-            findings.append(
+            advisories.append(
                 "No arm, hand, or shoulder transform curves were found. If this file is intended "
                 "to replace a wave gesture, the arm-waving motion appears to be absent from the asset."
             )
@@ -418,8 +426,8 @@ def inspect_animation_payload(payload: bytes) -> AnimationPayloadInspection | No
         if duration_seconds is None or duration_seconds <= 0:
             findings.append("The KeyframeSequence has no positive-duration keyframes.")
         elif duration_seconds < 0.1:
-            findings.append(
-                f"The parsed duration is extremely short ({duration_seconds:.6g} s); "
+            advisories.append(
+                f"The parsed duration is very short ({duration_seconds:.6g} s); "
                 "the clip may be effectively a still frame."
             )
 
@@ -437,4 +445,5 @@ def inspect_animation_payload(payload: bytes) -> AnimationPayloadInspection | No
         rig_data_present=rig_data_present,
         joint_paths=tuple(joint_paths),
         findings=unique_findings,
+        advisories=tuple(dict.fromkeys(advisories)),
     )
