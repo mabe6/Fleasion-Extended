@@ -382,7 +382,7 @@ class _AssetNameResolver(QThread):
 
 
 class DatabaseAssetExplorer(QWidget):
-    """Scraper-style visual browser for the embedded Roblox files.content BLOBs."""
+    """Scraper-style visual browser for Roblox cache entries (content BLOBs or rbx-storage files)."""
 
     def __init__(self, parent: QWidget | None = None, *, config_manager=None):
         super().__init__(parent)
@@ -714,10 +714,15 @@ class DatabaseAssetExplorer(QWidget):
                 return False
             columns, _ddl, kind = browser.schema(tables['files'].name)
             names = {str(column['name']).casefold() for column in columns}
-            if kind != 'table' or not {'id', 'content', 'size'}.issubset(names):
+            file_backed = self._assets_path().is_dir()
+            if (
+                kind != 'table'
+                or not {'id', 'size'}.issubset(names)
+                or ('content' not in names and not file_backed)
+            ):
                 self._scan_note = (
-                    'This database has no compatible files.content BLOB column. '
-                    'Older file-backed entries can be inspected from Cache Slots.'
+                    'This database has no files.content BLOB column and no rbx-storage '
+                    'folder beside it, so there are no entries to read.'
                 )
                 self.status_label.setText(self._scan_note)
                 return False
@@ -727,6 +732,41 @@ class DatabaseAssetExplorer(QWidget):
         self.refresh()
         return True
 
+    def _assets_path(self) -> Path:
+        """Return the external rbx-storage folder that sits beside the database."""
+        if self.database_path is None:
+            return Path()
+        return self.database_path.parent / 'rbx-storage'
+
+    def _read_entry_bytes(self, entry_id: str) -> bytes:
+        """Read a cache entry from its content BLOB or, failing that, its physical file."""
+        if self.database_path is None:
+            raise SQLiteBrowserError('No database is open.')
+        browser = SQLiteBrowser(self.database_path)
+        columns, _ddl, _kind = browser.schema('files')
+        names = {str(column['name']).casefold() for column in columns}
+        with contextlib.closing(browser.connect_readonly()) as connection:
+            select = quote_identifier('content') if 'content' in names else 'NULL'
+            row = connection.execute(
+                f'SELECT {select} FROM {quote_identifier("files")} '
+                f'WHERE {quote_identifier("id")} = ?',
+                (bytes.fromhex(entry_id),),
+            ).fetchone()
+        if row is None:
+            raise SQLiteBrowserError('The selected cache row no longer exists.')
+        data = row[0]
+        if isinstance(data, memoryview):
+            data = data.tobytes()
+        if isinstance(data, bytes):
+            return data
+        physical = self._assets_path() / entry_id[:2] / entry_id
+        if not physical.is_file():
+            raise SQLiteBrowserError(
+                'The selected row has no content BLOB and no cache file was found at '
+                f'{physical}.'
+            )
+        return physical.read_bytes()
+
     def refresh(self) -> None:
         if self.database_path is None:
             return
@@ -734,45 +774,59 @@ class DatabaseAssetExplorer(QWidget):
             browser = SQLiteBrowser(self.database_path)
             columns, _ddl, _kind = browser.schema('files')
             names = {str(column['name']).casefold() for column in columns}
+            has_content = 'content' in names
             select = [
                 f'hex({quote_identifier("id")}) AS entry_id',
                 f'{quote_identifier("size")} AS db_size',
-                f'length({quote_identifier("content")}) AS content_size',
-                f'substr({quote_identifier("content")}, 1, ?) AS sample',
             ]
-            params: list[Any] = [_SAMPLE_BYTES]
+            params: list[Any] = []
+            if has_content:
+                select.append(f'length({quote_identifier("content")}) AS content_size')
+                select.append(f'substr({quote_identifier("content")}, 1, ?) AS sample')
+                params.append(_SAMPLE_BYTES)
+            else:
+                select.append('NULL AS content_size')
+                select.append('NULL AS sample')
             for name in ('category', 'hits', 'atime'):
                 if name in names:
                     select.append(f'{quote_identifier(name)} AS {name}')
                 else:
                     select.append(f'NULL AS {name}')
             order = f' ORDER BY {quote_identifier("atime")} DESC' if 'atime' in names else ''
+            assets_path = self._assets_path()
             with contextlib.closing(browser.connect_readonly()) as connection:
-                total_row = connection.execute(
-                    f'SELECT COUNT(*) FROM {quote_identifier("files")} '
-                    f'WHERE {quote_identifier("content")} IS NOT NULL'
-                ).fetchone()
-                total = int(total_row[0] if total_row else 0)
-                total_size_row = connection.execute(
-                    f'SELECT COALESCE(SUM(length({quote_identifier("content")})), 0) '
-                    f'FROM {quote_identifier("files")} WHERE {quote_identifier("content")} IS NOT NULL'
-                ).fetchone()
-                total_size = int(total_size_row[0] or 0) if total_size_row else 0
-                query = (
-                    f'SELECT {", ".join(select)} FROM {quote_identifier("files")} '
-                    f'WHERE {quote_identifier("content")} IS NOT NULL{order} LIMIT ?'
-                )
-                params.append(_MAX_ROWS)
+                # Rows may hold their bytes in a BLOB or in a file under rbx-storage
+                query = f'SELECT {", ".join(select)} FROM {quote_identifier("files")}{order}'
                 rows = connection.execute(query, params)
                 loaded: list[_AssetItem] = []
+                total = 0
+                total_size = 0
                 for row in rows:
+                    entry_id = str(row['entry_id'] or '').casefold()
                     sample = row['sample']
                     if isinstance(sample, memoryview):
                         sample = sample.tobytes()
+                    content_size = int(row['content_size'] or 0)
                     if not isinstance(sample, bytes):
+                        # No BLOB, so fall back to the physical cache file
                         sample = b''
+                        content_size = 0
+                        physical = assets_path / entry_id[:2] / entry_id
+                        try:
+                            if physical.is_file():
+                                content_size = physical.stat().st_size
+                                with physical.open('rb') as handle:
+                                    sample = handle.read(_SAMPLE_BYTES)
+                        except OSError:
+                            sample = b''
+                            content_size = 0
+                        if not content_size:
+                            continue
+                    total += 1
+                    total_size += content_size
+                    if len(loaded) >= _MAX_ROWS:
+                        continue
                     kind, url = _detect_kind(sample)
-                    entry_id = str(row['entry_id'] or '').casefold()
                     asset_id = _asset_id_from_url(url)
                     cached_meta = self._name_cache.get(asset_id, {})
                     embedded_name = _embedded_name(sample)
@@ -780,7 +834,7 @@ class DatabaseAssetExplorer(QWidget):
                         _AssetItem(
                             entry_id=entry_id,
                             db_size=int(row['db_size'] or 0),
-                            content_size=int(row['content_size'] or 0),
+                            content_size=content_size,
                             kind=kind,
                             url=url,
                             asset_id=asset_id,
@@ -796,9 +850,9 @@ class DatabaseAssetExplorer(QWidget):
             self.items = loaded
             self.items_by_id = {item.entry_id: item for item in loaded}
             if total > _MAX_ROWS:
-                self._scan_note = f'Loaded {_MAX_ROWS:,} of {total:,} embedded assets; older rows may be omitted.'
+                self._scan_note = f'Loaded {_MAX_ROWS:,} of {total:,} cached assets; older rows may be omitted.'
             else:
-                self._scan_note = f'{total:,} embedded assets loaded.'
+                self._scan_note = f'{total:,} cached assets loaded.'
             self.stats_total_label.setText(f'{total:,} assets')
             self.stats_size_label.setText(_format_size(total_size))
             self._page_offset = 0
@@ -1075,20 +1129,7 @@ class DatabaseAssetExplorer(QWidget):
                 return
             if self.database_path is None:
                 return
-            browser = SQLiteBrowser(self.database_path)
-            with contextlib.closing(browser.connect_readonly()) as connection:
-                row = connection.execute(
-                    f'SELECT {quote_identifier("content")} FROM {quote_identifier("files")} '
-                    f'WHERE {quote_identifier("id")} = ?',
-                    (bytes.fromhex(item.entry_id),),
-                ).fetchone()
-            if row is None:
-                raise SQLiteBrowserError('The selected cache row no longer exists.')
-            data = row[0]
-            if isinstance(data, memoryview):
-                data = data.tobytes()
-            if not isinstance(data, bytes):
-                raise SQLiteBrowserError('The selected row has no embedded content BLOB.')
+            data = self._read_entry_bytes(item.entry_id)
             _url, payload, _has_header = split_rbxh_entry(data)
             self._current_payload = payload
 
