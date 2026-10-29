@@ -6,7 +6,7 @@
 > [!CAUTION]
 > This is not the official Fleasion project. Upstream information and releases are available at [fleasion/Fleasion](https://github.com/fleasion/Fleasion). Builds and changes in this fork are maintained separately.
 
-# Fleasion-Extended
+# Fleasion-db
 
 Fleasion-Extended keeps Fleasion's existing Qt interface and asset preview tools while adding a local database workspace. The goal of the CacheSwap branch is to inspect and modify local Roblox SQLite databases directly, rather than depend on network interception for this workflow.
 
