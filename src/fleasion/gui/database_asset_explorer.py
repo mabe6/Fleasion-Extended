@@ -384,6 +384,9 @@ class _AssetNameResolver(QThread):
 class DatabaseAssetExplorer(QWidget):
     """Scraper-style visual browser for the embedded Roblox files.content BLOBs."""
 
+    # Emits ('target' | 'source', cache entry ID) so the swap page can fill its fields
+    entry_picked = pyqtSignal(str, str)
+
     def __init__(self, parent: QWidget | None = None, *, config_manager=None):
         super().__init__(parent)
         self.config_manager = config_manager
@@ -602,6 +605,16 @@ class DatabaseAssetExplorer(QWidget):
         self.copy_asset_button.clicked.connect(self._copy_asset_id)
         actions.addWidget(self.copy_asset_button)
 
+        self.use_target_button = QPushButton('Use as target')
+        self.use_target_button.setEnabled(False)
+        self.use_target_button.clicked.connect(lambda: self._pick_entry('target'))
+        actions.addWidget(self.use_target_button)
+
+        self.use_source_button = QPushButton('Use as replacement')
+        self.use_source_button.setEnabled(False)
+        self.use_source_button.clicked.connect(lambda: self._pick_entry('source'))
+        actions.addWidget(self.use_source_button)
+
         self.export_button = QPushButton('Export payload…')
         self.export_button.setEnabled(False)
         self.export_button.clicked.connect(self._export_payload)
@@ -699,6 +712,8 @@ class DatabaseAssetExplorer(QWidget):
         self._current_entry_id = ''
         self._scan_note = ''
         self.copy_id_button.setEnabled(False)
+        self.use_target_button.setEnabled(False)
+        self.use_source_button.setEnabled(False)
         self.copy_asset_button.setEnabled(False)
         self.export_button.setEnabled(False)
         self.asset_table.setRowCount(0)
@@ -936,6 +951,8 @@ class DatabaseAssetExplorer(QWidget):
             self._current_entry_id = ''
             self._current_payload = None
             self.copy_id_button.setEnabled(False)
+            self.use_target_button.setEnabled(False)
+            self.use_source_button.setEnabled(False)
             self.copy_asset_button.setEnabled(False)
             self.export_button.setEnabled(False)
             self.preview_panel.hide()
@@ -977,6 +994,8 @@ class DatabaseAssetExplorer(QWidget):
         self._current_entry_id = item.entry_id
         self._current_request_id = item.entry_id
         self.copy_id_button.setEnabled(True)
+        self.use_target_button.setEnabled(True)
+        self.use_source_button.setEnabled(True)
         self.copy_asset_button.setEnabled(bool(item.asset_id))
         self.export_button.setEnabled(True)
 
@@ -1309,6 +1328,12 @@ class DatabaseAssetExplorer(QWidget):
         self._current_image = None
         self.image_preview.clear()
         self.preview_stack.setCurrentWidget(self.info_preview)
+
+    def _pick_entry(self, role: str) -> None:
+        if self._current_entry_id:
+            self.entry_picked.emit(role, self._current_entry_id)
+            label = 'target' if role == 'target' else 'replacement'
+            self.status_label.setText(f'Sent {self._current_entry_id} to the Swaps page as the {label} ID.')
 
     def _copy_selected_id(self) -> None:
         if self._current_entry_id:

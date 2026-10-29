@@ -6,10 +6,9 @@ import sqlite3
 import time
 from pathlib import Path
 
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtWidgets import (
     QAbstractItemView,
-    QComboBox,
     QGroupBox,
     QHeaderView,
     QFileDialog,
@@ -22,6 +21,8 @@ from PyQt6.QtWidgets import (
     QTableWidget,
     QTableWidgetItem,
     QTabWidget,
+    QTreeWidget,
+    QTreeWidgetItem,
     QVBoxLayout,
     QWidget,
 )
@@ -69,9 +70,13 @@ class RobloxCacheTab(QWidget):
             settings.get('show_cache_probe_header', False)
             if isinstance(settings, dict) else False
         )
+        self._rendering_swaps = False
+        self._entries_stale = False
         self._build_ui()
         if additional_tab is not None:
-            self.pages.addTab(additional_tab, 'Asset Database')
+            self._attach_load_db_page(additional_tab)
+        self.pages.currentChanged.connect(self._page_changed)
+        self._update_cache_status()
         self._render_active_swaps()
 
     def _build_ui(self) -> None:
@@ -82,67 +87,66 @@ class RobloxCacheTab(QWidget):
         self.pages = QTabWidget()
         root.addWidget(self.pages, 1)
 
-        # First page follows Fleasion's original profile editor: active swaps above,
-        # editable IDs below. Users can paste cache-entry IDs directly.
+        # Page 1 mirrors Fleasion's Replacer tab: a group box on top, a list of profiles
+        # with an On/Off status, then the Add / Edit section underneath.
         self.swaps_page = QWidget()
         swaps_layout = QVBoxLayout(self.swaps_page)
         swaps_layout.setContentsMargins(6, 6, 6, 6)
         swaps_layout.setSpacing(6)
 
-        filters_group = QGroupBox('Filters')
-        filters_layout = QHBoxLayout(filters_group)
-        filters_layout.setContentsMargins(8, 5, 8, 5)
-        filters_layout.addWidget(QLabel('Search:'))
+        cache_group = QGroupBox('Cache')
+        cache_group.setStyleSheet('QGroupBox::title { padding-left: 5px; }')
+        cache_layout = QHBoxLayout(cache_group)
+        cache_layout.setContentsMargins(8, 5, 8, 5)
+        cache_layout.addWidget(QLabel('Database:'))
+        self.cache_status_label = QLabel('')
+        self.cache_status_label.setWordWrap(True)
+        cache_layout.addWidget(self.cache_status_label, 1)
+        cache_layout.addWidget(QLabel('Search:'))
         self.swap_filter_edit = QLineEdit()
-        self.swap_filter_edit.setPlaceholderText(
-            'Swap name, target cache ID, replacement ID or date'
-        )
+        self.swap_filter_edit.setPlaceholderText('Swap name, target ID, replacement ID')
+        self.swap_filter_edit.setClearButtonEnabled(True)
         self.swap_filter_edit.textChanged.connect(self._render_active_swaps)
-        filters_layout.addWidget(self.swap_filter_edit, 1)
-        filters_layout.addWidget(QLabel('Status:'))
-        self.swap_status_filter = QComboBox()
-        self.swap_status_filter.addItem('All swaps', 'all')
-        self.swap_status_filter.addItem('Active only', 'active')
-        self.swap_status_filter.addItem('Changed since swap', 'changed')
-        self.swap_status_filter.currentIndexChanged.connect(self._render_active_swaps)
-        filters_layout.addWidget(self.swap_status_filter)
+        cache_layout.addWidget(self.swap_filter_edit, 1)
+        enable_all_button = QPushButton('Enable All')
+        enable_all_button.clicked.connect(lambda: self._set_all_swaps(True))
+        cache_layout.addWidget(enable_all_button)
+        disable_all_button = QPushButton('Disable All')
+        disable_all_button.clicked.connect(lambda: self._set_all_swaps(False))
+        cache_layout.addWidget(disable_all_button)
+        swaps_layout.addWidget(cache_group)
+
+        title_row = QHBoxLayout()
+        title_label = QLabel('Cache Swaps')
+        title_label.setStyleSheet('font-weight: bold; padding-left: 5px;')
+        title_row.addWidget(title_label)
+        title_row.addStretch()
         self.swap_count_label = QLabel('0 swaps')
-        filters_layout.addWidget(self.swap_count_label)
-        swaps_layout.addWidget(filters_group)
+        title_row.addWidget(self.swap_count_label)
+        swaps_layout.addLayout(title_row)
 
-        active_group = QWidget()
-        active_layout = QVBoxLayout(active_group)
-        active_layout.setContentsMargins(0, 0, 0, 0)
-        active_layout.setSpacing(3)
-        active_layout.addWidget(QLabel('Active Swaps'))
-
-        self.swaps_table = QTableWidget(0, 5)
-        self.swaps_table.setHorizontalHeaderLabels(
+        self.swaps_tree = QTreeWidget()
+        self.swaps_tree.setHeaderLabels(
             ['Status', 'Swap Name', 'Target Cache ID', 'Replacement Cache ID', 'Applied']
         )
-        self.swaps_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
-        self.swaps_table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
-        self.swaps_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
-        self.swaps_table.setAlternatingRowColors(True)
-        self.swaps_table.setSortingEnabled(False)
-        self.swaps_table.verticalHeader().hide()
-        self.swaps_table.horizontalHeader().setStretchLastSection(False)
-        self.swaps_table.horizontalHeader().setSectionResizeMode(
-            1, QHeaderView.ResizeMode.Stretch
-        )
-        self.swaps_table.setColumnWidth(0, 125)
-        self.swaps_table.setColumnWidth(2, 250)
-        self.swaps_table.setColumnWidth(3, 250)
-        self.swaps_table.setColumnWidth(4, 145)
-        self.swaps_table.itemDoubleClicked.connect(self._load_selected_swap)
-        active_layout.addWidget(self.swaps_table, 1)
-        swaps_layout.addWidget(active_group, 1)
+        self.swaps_tree.setRootIsDecorated(False)
+        self.swaps_tree.setAlternatingRowColors(True)
+        self.swaps_tree.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self.swaps_tree.setSortingEnabled(True)
+        header = self.swaps_tree.header()
+        header.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
+        header.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
+        header.setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
+        header.setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
+        header.setSectionResizeMode(4, QHeaderView.ResizeMode.ResizeToContents)
+        self.swaps_tree.itemChanged.connect(self._on_swap_item_changed)
+        self.swaps_tree.itemDoubleClicked.connect(self._load_selected_swap)
+        swaps_layout.addWidget(self.swaps_tree, 1)
 
-        edit_group = QWidget()
+        edit_group = QGroupBox('Add / Edit Swap')
+        edit_group.setStyleSheet('QGroupBox::title { padding-left: 5px; }')
         edit_layout = QVBoxLayout(edit_group)
-        edit_layout.setContentsMargins(0, 0, 0, 0)
         edit_layout.setSpacing(4)
-        edit_layout.addWidget(QLabel('Add / Edit Swap'))
 
         name_row = QHBoxLayout()
         name_row.addWidget(QLabel('Swap name:'))
@@ -165,15 +169,15 @@ class RobloxCacheTab(QWidget):
         edit_layout.addLayout(ids_row)
 
         actions = QHBoxLayout()
-        self.swap_button = QPushButton('Apply / Update Swap')
+        self.swap_button = QPushButton('Add / Update Swap')
         self.swap_button.clicked.connect(self._swap_selected_entries)
         actions.addWidget(self.swap_button)
         load_button = QPushButton('Load Selected')
         load_button.clicked.connect(self._load_selected_swap)
         actions.addWidget(load_button)
-        restore_button = QPushButton('Restore Selected')
-        restore_button.clicked.connect(self._restore_selected_swap)
-        actions.addWidget(restore_button)
+        remove_button = QPushButton('Remove Swap')
+        remove_button.clicked.connect(self._remove_selected_swap)
+        actions.addWidget(remove_button)
         restore_all_button = QPushButton('Restore All')
         restore_all_button.clicked.connect(self._restore_all)
         actions.addWidget(restore_all_button)
@@ -187,12 +191,13 @@ class RobloxCacheTab(QWidget):
         swaps_layout.addWidget(edit_group)
 
         self.status_label = QLabel(
-            'Local cache mode. Close Roblox Player / Studio before applying or restoring a swap.'
+            'Tick a swap to turn it on, untick to restore the original. '
+            'Close Roblox Player / Studio / Sober first.'
         )
         self.status_label.setWordWrap(True)
         swaps_layout.addWidget(self.status_label)
 
-        self.pages.addTab(self.swaps_page, 'Active Swaps')
+        self.pages.addTab(self.swaps_page, 'Swaps')
 
         # Cache inventory remains available in a separate compact page. Selecting a
         # row can fill either of the ID fields above.
@@ -204,7 +209,7 @@ class RobloxCacheTab(QWidget):
         path_row = QHBoxLayout()
         path_row.addWidget(QLabel('Roblox cache root:'))
         self.root_edit = QLineEdit(str(default_roblox_cache_root()))
-        self.root_edit.setPlaceholderText('Folder containing rbx-storage.db and rbx-storage/')
+        self.root_edit.setPlaceholderText('Folder containing rbx-storage.db (sub-folders are searched too)')
         path_row.addWidget(self.root_edit, 1)
         browse_button = QPushButton('Browse…')
         browse_button.clicked.connect(self._browse_root)
@@ -279,25 +284,112 @@ class RobloxCacheTab(QWidget):
         self.source_edit.clear()
 
     def _load_selected_swap(self, *_args) -> None:
-        row = self.swaps_table.currentRow()
-        if row < 0:
+        item = self.swaps_tree.currentItem()
+        if item is None:
             return
-        target_item = self.swaps_table.item(row, 2)
-        source_item = self.swaps_table.item(row, 3)
-        name_item = self.swaps_table.item(row, 1)
-        if target_item is not None:
-            self.target_edit.setText(str(target_item.data(Qt.ItemDataRole.UserRole) or target_item.text()))
-        if source_item is not None:
-            self.source_edit.setText(str(source_item.data(Qt.ItemDataRole.UserRole) or source_item.text()))
-        if name_item is not None:
-            self.swap_name_edit.setText(name_item.text())
+        self.target_edit.setText(str(item.data(1, Qt.ItemDataRole.UserRole) or ''))
+        self.source_edit.setText(str(item.data(3, Qt.ItemDataRole.UserRole) or ''))
+        self.swap_name_edit.setText(item.text(1))
 
-    def _restore_selected_swap(self) -> None:
-        if self.swaps_table.currentRow() < 0:
-            self._show_error('Select a swap', 'Select an active swap row first.')
+    def _attach_load_db_page(self, editor: QWidget) -> None:
+        """Put the database loader and its asset preview on page 2, right after the swap list."""
+        self.pages.insertTab(1, editor, 'Load DB')
+        opened = getattr(editor, 'database_opened', None)
+        if opened is not None:
+            opened.connect(self._use_database)
+        explorer = getattr(editor, 'asset_explorer', None)
+        if explorer is not None:
+            explorer.entry_picked.connect(self._entry_picked)
+
+    def _use_database(self, path: str) -> None:
+        """Follow the database opened on the Load DB page."""
+        self.root_edit.setText(str(Path(path).parent))
+        self.store = RobloxCacheStore(path)
+        self.entries = []
+        self.entries_by_id = {}
+        self._entries_stale = False
+        self._render_entries()
+        self._update_cache_status()
+        self._render_active_swaps()
+
+    def _entry_picked(self, role: str, entry_id: str) -> None:
+        (self.target_edit if role == 'target' else self.source_edit).setText(entry_id)
+        self.pages.setCurrentIndex(0)
+
+    def _page_changed(self, index: int) -> None:
+        if self._entries_stale and self.entries and self.pages.widget(index) is self.entries_page:
+            self._entries_stale = False
+            self.refresh()
+
+    def _update_cache_status(self) -> None:
+        try:
+            self.store.validate()
+        except RobloxCacheError as exc:
+            self.cache_status_label.setText(
+                'Not found. Open the Load DB tab and choose the folder that contains rbx-storage.db.'
+            )
+            self.cache_status_label.setToolTip(str(exc))
+        else:
+            self.cache_status_label.setText(str(self.store.database_path))
+            self.cache_status_label.setToolTip(str(self.store.database_path))
+
+    def _set_swap_enabled(self, target_id: str, source_id: str, name: str, enable: bool) -> None:
+        try:
+            if enable:
+                if len(source_id) != 32:
+                    raise RobloxCacheError('This swap has no 32-character replacement ID saved.')
+                message = self.store.swap(target_id, source_id, origin=name)
+            else:
+                message = self.store.restore(target_id)
+            self.status_label.setText(message)
+            self._entries_stale = True
+        except (RobloxCacheError, OSError, sqlite3.Error) as exc:
+            self._show_error('Cache swap failed' if enable else 'Restore failed', str(exc))
+        self._render_active_swaps()
+
+    def _on_swap_item_changed(self, item: QTreeWidgetItem, column: int) -> None:
+        if column != 0 or self._rendering_swaps:
             return
-        self._load_selected_swap()
-        self._restore_target()
+        args = (
+            str(item.data(1, Qt.ItemDataRole.UserRole) or ''),
+            str(item.data(3, Qt.ItemDataRole.UserRole) or ''),
+            item.text(1),
+            item.checkState(0) == Qt.CheckState.Checked,
+        )
+        # Re-rendering inside the itemChanged signal would delete the item being edited
+        QTimer.singleShot(0, lambda: self._set_swap_enabled(*args))
+
+    def _set_all_swaps(self, enable: bool) -> None:
+        try:
+            for record in self.store.saved_swaps():
+                target_id = record['target']
+                is_on = self.store.swap_status(target_id) == 'swapped'
+                if is_on == enable:
+                    continue
+                if enable:
+                    self.store.swap(target_id, str(record.get('source') or ''), origin=str(record.get('name') or ''))
+                else:
+                    self.store.restore(target_id)
+            self._entries_stale = True
+            self.status_label.setText('All swaps enabled.' if enable else 'All swaps disabled.')
+        except (RobloxCacheError, OSError, sqlite3.Error) as exc:
+            self._show_error('Cache swap failed', str(exc))
+        self._render_active_swaps()
+
+    def _remove_selected_swap(self) -> None:
+        item = self.swaps_tree.currentItem()
+        if item is None:
+            self._show_error('Select a swap', 'Select a swap in the list first.')
+            return
+        target_id = str(item.data(1, Qt.ItemDataRole.UserRole) or '')
+        try:
+            if self.store._manifest().get(target_id):
+                self.store.restore(target_id)
+            self.store.forget_swap(target_id)
+            self._entries_stale = True
+        except (RobloxCacheError, OSError, sqlite3.Error) as exc:
+            self._show_error('Remove failed', str(exc))
+        self._render_active_swaps()
 
     def _browse_root(self) -> None:
         folder = QFileDialog.getExistingDirectory(
@@ -367,64 +459,46 @@ class RobloxCacheTab(QWidget):
         self.table.setColumnWidth(8, 400)
 
     def _render_active_swaps(self, *_args) -> None:
-        """Render saved swap state in the same list-first style as Fleasion profiles."""
+        """List every saved swap with an On/Off checkbox, like Fleasion's profile list."""
         try:
+            records = self.store.saved_swaps()
             manifest = self.store._manifest()
         except (OSError, ValueError):
-            manifest = {}
-        records = sorted(
-            manifest.items(),
-            key=lambda pair: str(pair[1].get('time') or ''),
-            reverse=True,
-        )
+            records, manifest = [], {}
         query = self.swap_filter_edit.text().strip().casefold()
-        status_filter = self.swap_status_filter.currentData()
-        visible_records = []
-        for target_id, record in records:
-            status = self.store.swap_status(target_id)
-            status_label = 'Active' if status == 'swapped' else 'Changed since swap'
-            haystack = ' '.join((
-                str(record.get('origin') or 'Local cache swap'),
-                target_id,
-                str(record.get('source') or ''),
-                str(record.get('time') or ''),
-                status_label,
-            )).casefold()
-            if query and query not in haystack:
+        self._rendering_swaps = True
+        self.swaps_tree.setSortingEnabled(False)
+        self.swaps_tree.clear()
+        shown = 0
+        for record in records:
+            target_id = str(record['target'])
+            source_id = str(record.get('source') or '')
+            name = str(record.get('name') or 'Local cache swap')
+            applied = manifest.get(target_id)
+            status = self.store.swap_status(target_id) if applied else ''
+            state = 'On' if status == 'swapped' else 'Changed' if status else 'Off'
+            if query and query not in ' '.join((name, target_id, source_id, state)).casefold():
                 continue
-            if status_filter == 'active' and status != 'swapped':
-                continue
-            if status_filter == 'changed' and status == 'swapped':
-                continue
-            visible_records.append((target_id, record, status, status_label))
-
+            item = QTreeWidgetItem(
+                [state, name, target_id, source_id, str(applied.get('time') or '—') if applied else '—']
+            )
+            item.setFlags(
+                Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable | Qt.ItemFlag.ItemIsUserCheckable
+            )
+            item.setCheckState(
+                0, Qt.CheckState.Checked if status == 'swapped' else Qt.CheckState.Unchecked
+            )
+            if state == 'Changed':
+                item.setToolTip(0, 'The cache entry no longer matches the swap (Roblox refreshed it). Tick to re-apply.')
+            item.setData(1, Qt.ItemDataRole.UserRole, target_id)
+            item.setData(3, Qt.ItemDataRole.UserRole, source_id)
+            self.swaps_tree.addTopLevelItem(item)
+            shown += 1
+        self.swaps_tree.setSortingEnabled(True)
+        self._rendering_swaps = False
         self.swap_count_label.setText(
-            f'{len(visible_records):,} / {len(records):,} swaps'
-            if query or status_filter != 'all' else f'{len(records):,} swaps'
+            f'{shown:,} / {len(records):,} swaps' if query else f'{len(records):,} swaps'
         )
-        self.swaps_table.setUpdatesEnabled(False)
-        self.swaps_table.setRowCount(0)
-        for target_id, record, status, status_label in visible_records:
-            row = self.swaps_table.rowCount()
-            self.swaps_table.insertRow(row)
-            values = [
-                status_label,
-                str(record.get('origin') or 'Local cache swap'),
-                target_id,
-                str(record.get('source') or ''),
-                str(record.get('time') or '—'),
-            ]
-            for column, value in enumerate(values):
-                item = QTableWidgetItem(value)
-                item.setToolTip(value)
-                item.setFlags(Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable)
-                if column == 2:
-                    item.setData(Qt.ItemDataRole.UserRole, target_id)
-                elif column == 3:
-                    item.setData(Qt.ItemDataRole.UserRole, str(record.get('source') or ''))
-                self.swaps_table.setItem(row, column, item)
-        self.swaps_table.setUpdatesEnabled(True)
-        self.swaps_table.resizeRowsToContents()
 
     def refresh(self) -> None:
         root = self.root_edit.text().strip().strip('"')
@@ -635,18 +709,14 @@ class RobloxCacheTab(QWidget):
 
     def _verify_selected_target(self) -> None:
         """Read the selected target back and report whether the intended swap is still present."""
-        row = self.swaps_table.currentRow()
-        target_id = ''
-        if row >= 0:
-            item = self.swaps_table.item(row, 2)
-            if item is not None:
-                target_id = str(item.data(Qt.ItemDataRole.UserRole) or item.text()).strip().lower()
+        item = self.swaps_tree.currentItem()
+        target_id = str(item.data(1, Qt.ItemDataRole.UserRole) or '').strip().lower() if item else ''
         if not target_id:
             target_id = self.target_edit.text().strip().lower()
         if len(target_id) != 32:
             self._show_error(
                 'Select a target',
-                'Select an Active Swaps row or paste a 32-character target cache ID first.',
+                'Select a swap in the list or paste a 32-character target cache ID first.',
             )
             return
         try:
@@ -695,25 +765,6 @@ class RobloxCacheTab(QWidget):
                 self.status_label.setText(f'Verification warning for {target_id[:8]}…: inspect the report.')
         except (RobloxCacheError, OSError, sqlite3.Error) as exc:
             self._show_error('Target verification failed', str(exc))
-
-    def _restore_target(self) -> None:
-        try:
-            target_id, _source = self._selected_pair()
-            answer = QMessageBox.question(
-                self,
-                'Restore cache slot',
-                f'Restore the saved original for {target_id}?\n\nA database backup will be created first.',
-                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
-                QMessageBox.StandardButton.Cancel,
-            )
-            if answer != QMessageBox.StandardButton.Yes:
-                return
-            message = self.store.restore(target_id)
-            self.output.appendPlainText(message)
-            self.status_label.setText(message)
-            self.refresh()
-        except (RobloxCacheError, OSError, sqlite3.Error) as exc:
-            self._show_error('Restore failed', str(exc))
 
     def _restore_all(self) -> None:
         answer = QMessageBox.warning(

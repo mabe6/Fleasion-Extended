@@ -765,8 +765,8 @@ class ReplacerConfigWindow(QDialog):
             self.tab_widget.addTab(cache_tab, tr('ui.gui.replacer_config.scraper'))
             self._http_proxy_dependent_tabs.append(cache_tab)
 
-        # Keep all local database/cache tools together. The first inner page is
-        # Fleasion-style Active Swaps, followed by Cache Slots and the asset/SQLite browser.
+        # Keep all local database/cache tools together: Fleasion-style Swaps (on/off list),
+        # then Load DB (database loader with asset preview), then Cache Slots.
         from .local_database_editor import LocalDatabaseEditorWidget
         from .roblox_cache_tab import RobloxCacheTab
 

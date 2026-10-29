@@ -7,7 +7,7 @@ import sqlite3
 from pathlib import Path
 from typing import Any
 
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtWidgets import (
     QAbstractItemView,
     QCheckBox,
@@ -31,6 +31,7 @@ from PyQt6.QtWidgets import (
 )
 
 from .database_asset_explorer import DatabaseAssetExplorer
+from ..database.cache_locator import find_default_cache_location, resolve_cache_location
 from ..database.sqlite_browser import (
     MAX_QUERY_ROWS,
     SQLiteBrowser,
@@ -68,6 +69,8 @@ class LocalDatabaseEditorWidget(QWidget):
     """Browse tables and edit individual cells with a verified backup before each write."""
 
     PAGE_SIZES = (25, 50, 100, 250, 500, 1000)
+    # Emitted with the database path once a database has opened, so other pages can follow it
+    database_opened = pyqtSignal(str)
 
     def __init__(
         self,
@@ -114,8 +117,12 @@ class LocalDatabaseEditorWidget(QWidget):
         scan_row = QHBoxLayout()
         scan_row.addWidget(QLabel("Search folder:"))
         self.scan_path_edit = QLineEdit()
+        self._default_location = find_default_cache_location()
         default_root = os.environ.get("LOCALAPPDATA", "")
-        self.default_scan_root = str(Path(default_root) / "Roblox") if default_root else str(Path.home())
+        if self._default_location is not None:
+            self.default_scan_root = str(self._default_location.root)
+        else:
+            self.default_scan_root = str(Path(default_root) / "Roblox") if default_root else str(Path.home())
         self.scan_path_edit.setText(self.default_scan_root)
         scan_row.addWidget(self.scan_path_edit, 1)
         folder_button = QPushButton("Choose folder…")
@@ -247,9 +254,8 @@ class LocalDatabaseEditorWidget(QWidget):
 
     def _find_default_database(self) -> None:
         """Open the standard Roblox cache DB if it exists; do not scan the entire drive at startup."""
-        candidate = Path(self.default_scan_root) / "rbx-storage.db"
-        if candidate.is_file():
-            self._add_database(candidate, open_now=True)
+        if self._default_location is not None:
+            self._add_database(self._default_location.database_path, open_now=True)
             return
         self.status_label.setText(
             "Choose a database or scan a folder. Databases open read-only by default."
@@ -268,7 +274,22 @@ class LocalDatabaseEditorWidget(QWidget):
     def _open_path_from_line(self) -> None:
         value = self.path_edit.text().strip().strip('"')
         if value:
-            self._add_database(Path(value), open_now=True)
+            self._open_file_or_cache_folder(Path(value))
+
+    def _open_file_or_cache_folder(self, path: Path) -> bool:
+        """Open a database file, or find rbx-storage.db inside a folder and open that."""
+        path = path.expanduser()
+        if path.is_dir():
+            try:
+                location = resolve_cache_location(path)
+            except FileNotFoundError as exc:
+                self.status_label.setText(str(exc))
+                return False
+            self.scan_path_edit.setText(str(location.root))
+            self._add_database(location.database_path, open_now=True)
+            return True
+        self._add_database(path, open_now=True)
+        return True
 
     def _browse_scan_folder(self) -> None:
         folder = QFileDialog.getExistingDirectory(
@@ -276,6 +297,9 @@ class LocalDatabaseEditorWidget(QWidget):
         )
         if folder:
             self.scan_path_edit.setText(folder)
+            # A folder that holds rbx-storage.db (or has it somewhere below) opens straight away
+            if not self._open_file_or_cache_folder(Path(folder)):
+                self._scan_folder()
 
     def _scan_folder(self) -> None:
         root = self.scan_path_edit.text().strip().strip('"')
@@ -380,6 +404,7 @@ class LocalDatabaseEditorWidget(QWidget):
         self.status_label.setText(
             f"Opened read-only: {browser.path} — {len(tables)} table(s)/view(s)."
         )
+        self.database_opened.emit(str(browser.path))
 
     def _table_item_changed(
         self, current: QListWidgetItem | None, _previous: QListWidgetItem | None

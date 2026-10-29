@@ -16,6 +16,7 @@ from typing import Any
 
 from ..utils import CONFIG_DIR
 from .animation_payload import inspect_animation_payload
+from .cache_locator import ASSETS_NAME, DB_NAME, find_default_cache_location, resolve_cache_location
 from .sqlite_browser import SQLiteBrowser, SQLiteBrowserError, _is_roblox_process_running
 
 HEX32 = re.compile(r'[0-9a-f]{32}')
@@ -47,27 +48,16 @@ class RobloxCacheEntry:
 
 
 def default_roblox_cache_root() -> Path:
-    """Return the usual Roblox cache root on Windows, or a reasonable fallback."""
+    """Return the Roblox cache root: env override, then the first existing cache, then a fallback."""
     override = os.environ.get('FLEASION_ROBLOX_CACHE_DIR') or os.environ.get('CACHESWAP_ROBLOX_DIR')
     if override:
         return Path(override).expanduser()
+    found = find_default_cache_location()
+    if found is not None:
+        return found.root
     local_app_data = os.environ.get('LOCALAPPDATA')
     if local_app_data:
         return Path(local_app_data) / 'Roblox'
-    sober_data = (
-        Path.home()
-        / '.var'
-        / 'app'
-        / 'org.vinegarhq.Sober'
-        / 'data'
-        / 'sober'
-    )
-    # Sober commonly keeps its Roblox database under appData while assets use sibling folders.
-    sober_appdata = sober_data / 'appData'
-    if (sober_appdata / 'rbx-storage.db').is_file() or sober_appdata.is_dir():
-        return sober_appdata
-    if (sober_data / 'rbx-storage.db').is_file():
-        return sober_data
     return Path.home() / 'Roblox'
 
 
@@ -171,13 +161,25 @@ class RobloxCacheStore:
     """Inspect and update local rbx-storage files together with their SQLite metadata."""
 
     def __init__(self, root: str | os.PathLike[str] | None = None):
-        self.root = Path(root).expanduser().resolve() if root else default_roblox_cache_root().resolve()
-        self.database_path = self.root / 'rbx-storage.db'
-        self.assets_path = self.root / 'rbx-storage'
+        picked = Path(root).expanduser() if root else default_roblox_cache_root()
+        self.locate_error = ''
+        try:
+            location = resolve_cache_location(picked)
+        except FileNotFoundError as exc:
+            # Keep the plain layout so validate() reports the problem to the GUI
+            self.locate_error = str(exc)
+            self.root = picked.resolve()
+            self.database_path = self.root / DB_NAME
+            self.assets_path = self.root / ASSETS_NAME
+        else:
+            self.root = location.root
+            self.database_path = location.database_path
+            self.assets_path = location.assets_path or self.root / ASSETS_NAME
         self.state_dir = CONFIG_DIR / 'FleasionNT' / 'LocalCacheSwap'
         self.library_dir = self.state_dir / 'library'
         self.originals_dir = self.state_dir / 'originals'
         self.manifest_path = self.state_dir / 'manifest.json'
+        self.swaps_path = self.state_dir / 'swaps.json'
         self.history_path = self.state_dir / 'history.json'
 
     @staticmethod
@@ -188,7 +190,7 @@ class RobloxCacheStore:
     def validate(self) -> None:
         """Validate the cache database and accept either BLOB-backed or file-backed entries."""
         if not self.database_path.is_file():
-            raise RobloxCacheError(f'Roblox cache database not found:\n{self.database_path}')
+            raise RobloxCacheError(self.locate_error or f'Roblox cache database not found:\n{self.database_path}')
         try:
             browser = SQLiteBrowser(self.database_path)
             tables = {table.name: table for table in browser.tables()}
@@ -321,6 +323,38 @@ class RobloxCacheStore:
     def _manifest(self) -> dict[str, dict[str, Any]]:
         result = self._load_json(self.manifest_path, {})
         return result if isinstance(result, dict) else {}
+
+    def saved_swaps(self) -> list[dict[str, Any]]:
+        """Return every saved swap (on or off); swaps applied by older versions are added."""
+        saved = self._load_json(self.swaps_path, {})
+        if not isinstance(saved, dict):
+            saved = {}
+        changed = False
+        for target_id, record in self._manifest().items():
+            if target_id not in saved:
+                saved[target_id] = {
+                    'name': record.get('origin') or 'Local cache swap',
+                    'source': record.get('source') or '',
+                }
+                changed = True
+        if changed:
+            with contextlib.suppress(OSError):
+                self._save_json(self.swaps_path, saved)
+        return [{'target': target_id, **record} for target_id, record in saved.items()]
+
+    def remember_swap(self, target_id: str, source_id: str, name: str) -> None:
+        """Save a swap so it stays in the list (switched off) after it is restored."""
+        saved = self._load_json(self.swaps_path, {})
+        if not isinstance(saved, dict):
+            saved = {}
+        saved[target_id] = {'name': name, 'source': source_id}
+        self._save_json(self.swaps_path, saved)
+
+    def forget_swap(self, target_id: str) -> None:
+        """Remove a swap from the saved list; the caller restores the cache entry first."""
+        saved = self._load_json(self.swaps_path, {})
+        if isinstance(saved, dict) and saved.pop(target_id, None) is not None:
+            self._save_json(self.swaps_path, saved)
 
     def history(self) -> list[dict[str, Any]]:
         """Return the newest persisted swap and restore records."""
@@ -622,6 +656,9 @@ class RobloxCacheStore:
             }
             self._save_json(self.manifest_path, manifest)
             self._log_history('swap', target_id, source_id, origin or f'entry {source_id[:8]}')
+            # The saved list only powers the on/off swap list, so it must never trigger a rollback
+            with contextlib.suppress(OSError):
+                self.remember_swap(target_id, source_id, origin or f'entry {source_id[:8]}')
         except Exception as exc:
             if replaced_file:
                 with contextlib.suppress(OSError):
