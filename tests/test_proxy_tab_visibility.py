@@ -58,10 +58,13 @@ def test_manual_proxy_credential_timer_is_safe_when_proxy_controls_are_hidden() 
             self.started += 1
 
     timer = FakeTimer()
-    state = SimpleNamespace(_manual_proxy_credentials_timer=timer)
-
     # SettingsTab does not build the proxy transport widgets in this build.
-    assert SettingsTab._selected_manual_proxy_has_credentials(SimpleNamespace()) is True
+    state = SimpleNamespace(
+        _manual_proxy_credentials_timer=timer,
+        _selected_manual_proxy_has_credentials=lambda: SettingsTab._selected_manual_proxy_has_credentials(SimpleNamespace()),
+    )
+
+    assert state._selected_manual_proxy_has_credentials() is True
     SettingsTab._sync_manual_proxy_credentials_timer(state)
 
     assert timer.stopped == 1
