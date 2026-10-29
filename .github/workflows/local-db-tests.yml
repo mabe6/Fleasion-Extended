@@ -1,4 +1,4 @@
-name: Local SQLite editor tests
+name: Local cache and asset tests
 
 on:
   push:
@@ -13,6 +13,9 @@ on:
       - "src/fleasion/gui/settings_tab.py"
       - "src/fleasion/gui/replacer_config.py"
       - "tests/test_local_cache_ui.py"
+      - "src/fleasion/proxy/addons/cache_scraper.py"
+      - "src/fleasion/proxy/server.py"
+      - "tests/test_cache_scraper_places.py"
       - "tests/test_animation_payload.py"
       - "tests/test_animation_convert.py"
       - "tests/test_proxy_tab_visibility.py"
@@ -35,6 +38,9 @@ on:
       - "src/fleasion/gui/settings_tab.py"
       - "src/fleasion/gui/replacer_config.py"
       - "tests/test_local_cache_ui.py"
+      - "src/fleasion/proxy/addons/cache_scraper.py"
+      - "src/fleasion/proxy/server.py"
+      - "tests/test_cache_scraper_places.py"
       - "tests/test_animation_payload.py"
       - "tests/test_proxy_tab_visibility.py"
       - "tests/test_database_asset_explorer.py"
@@ -50,7 +56,7 @@ concurrency:
 
 jobs:
   sqlite-editor:
-    name: SQLite editor tests (Python 3.14)
+    name: Local cache and asset tests (Python 3.14)
     runs-on: ubuntu-latest
     env:
       QT_QPA_PLATFORM: offscreen
@@ -86,11 +92,13 @@ jobs:
           src/fleasion/local_database_mode.py
           src/fleasion/gui/local_database_editor.py
           src/fleasion/gui/database_asset_explorer.py
+          src/fleasion/proxy/addons/cache_scraper.py
+          src/fleasion/proxy/server.py
           src/fleasion/gui/roblox_cache_tab.py
           src/fleasion/gui/settings_tab.py
           src/fleasion/gui/replacer_config.py
           tests/test_local_cache_ui.py
-          tests/test_animation_payload.py tests/test_animation_convert.py
+          tests/test_animation_payload.py tests/test_animation_convert.py tests/test_cache_scraper_places.py
           tests/test_animation_convert.py
           tests/test_proxy_tab_visibility.py
           src/fleasion/tray.py
@@ -102,4 +110,4 @@ jobs:
           tests/test_local_database_mode.py
 
       - name: Run local database tests
-        run: uv run pytest -q tests/test_sqlite_browser.py tests/test_database_asset_explorer.py tests/test_proxy_tab_visibility.py tests/test_local_database_mode.py tests/test_roblox_cache_store.py tests/test_local_cache_ui.py tests/test_animation_payload.py tests/test_animation_convert.py
+        run: uv run pytest -q tests/test_sqlite_browser.py tests/test_database_asset_explorer.py tests/test_proxy_tab_visibility.py tests/test_local_database_mode.py tests/test_roblox_cache_store.py tests/test_local_cache_ui.py tests/test_animation_payload.py tests/test_animation_convert.py tests/test_cache_scraper_places.py
