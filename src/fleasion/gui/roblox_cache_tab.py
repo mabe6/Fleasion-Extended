@@ -11,6 +11,7 @@ from pathlib import Path
 from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtGui import QImage, QPixmap
 from PyQt6.QtWidgets import (
+    QApplication,
     QAbstractItemView,
     QComboBox,
     QGroupBox,
@@ -111,6 +112,9 @@ class RobloxCacheTab(QWidget):
         self._mesh_loader = None
         self._current_preview_image: QImage | None = None
         self._current_preview_request_id = ''
+        self._name_resolver = None
+        self._name_resolution_attempted: set[str] = set()
+        self._name_resolution_disabled = False
         self._mesh_panel = None
         self._model_panel = None
         self._animation_panel = None
@@ -123,6 +127,9 @@ class RobloxCacheTab(QWidget):
         if additional_tab is not None:
             self.pages.addTab(additional_tab, 'Asset Database')
         self._render_active_swaps()
+        app = QApplication.instance()
+        if app is not None:
+            app.aboutToQuit.connect(self._stop_name_resolver)
         if view_mode == 'slots' and callable(getattr(self.store, 'scan', None)):
             QTimer.singleShot(0, self.refresh)
 
@@ -986,6 +993,7 @@ class RobloxCacheTab(QWidget):
             return
         self._render_entries()
         self._render_active_swaps()
+        self._resolve_cache_names()
         active_swaps = sum(bool(entry.swap_status) for entry in self.entries)
         self.status_label.setText(
             f'Scanned {len(self.entries):,} cache entry/entries. '
@@ -993,6 +1001,109 @@ class RobloxCacheTab(QWidget):
             'Writes are blocked while Roblox Player, Studio or Sober is running.'
         )
         log_buffer.log('LocalCache', f'Scanned {len(self.entries)} entries at {self.store.root}')
+
+    def _resolve_cache_names(self) -> None:
+        """Resolve cached asset names in the background, sharing the Asset Database cache."""
+        if self._view_mode != 'slots' or self._name_resolution_disabled:
+            return
+        settings = getattr(self.config_manager, 'settings', None)
+        if not isinstance(settings, dict):
+            return
+        if self._name_resolver is not None and self._name_resolver.isRunning():
+            return
+        name_cache = settings.get('local_db_asset_names', {})
+        if not isinstance(name_cache, dict):
+            name_cache = {}
+        asset_ids = []
+        for entry in self.entries:
+            asset_id = str(entry.asset_id or '').strip()
+            if (
+                asset_id.isdigit()
+                and asset_id not in name_cache
+                and asset_id not in self._name_resolution_attempted
+                and asset_id not in asset_ids
+            ):
+                asset_ids.append(asset_id)
+            if len(asset_ids) >= 50:
+                break
+        if not asset_ids:
+            return
+
+        self._name_resolution_attempted.update(asset_ids)
+        try:
+            from .database_asset_explorer import _AssetNameResolver
+
+            worker = _AssetNameResolver(asset_ids, self)
+            self._name_resolver = worker
+            worker.names_ready.connect(self._on_cache_names_resolved)
+            worker.finished.connect(
+                lambda current=worker: self._on_cache_name_resolver_finished(current)
+            )
+            worker.start()
+        except Exception as exc:
+            self._name_resolution_disabled = True
+            log_buffer.log('LocalCache', f'Asset name lookup unavailable: {exc}')
+
+    def _on_cache_names_resolved(
+        self, results: dict, processed_ids: list, failed: bool
+    ) -> None:
+        for asset_id in processed_ids:
+            self._name_resolution_attempted.add(str(asset_id))
+        if failed:
+            self._name_resolution_disabled = True
+            self.status_label.setText(
+                'Roblox name lookup is unavailable; showing local names, asset IDs and cache hashes.'
+            )
+            return
+        if not results:
+            return
+
+        settings = getattr(self.config_manager, 'settings', None)
+        if not isinstance(settings, dict):
+            return
+        name_cache = settings.get('local_db_asset_names', {})
+        if not isinstance(name_cache, dict):
+            name_cache = {}
+        for asset_id, metadata in results.items():
+            if not isinstance(metadata, dict) or not metadata.get('name'):
+                continue
+            key = str(asset_id)
+            name_cache[key] = {
+                'name': str(metadata.get('name') or ''),
+                'creator_name': str(metadata.get('creator_name') or ''),
+                'created_at': str(metadata.get('created_at') or ''),
+                'updated_at': str(metadata.get('updated_at') or ''),
+            }
+            for entry in self.entries:
+                if str(entry.asset_id or '') == key:
+                    entry.name = name_cache[key]['name']
+        settings['local_db_asset_names'] = name_cache
+        save = getattr(self.config_manager, 'save', None)
+        if callable(save):
+            try:
+                save()
+            except Exception as exc:
+                log_buffer.log('LocalCache', f'Could not persist resolved asset names: {exc}')
+        self._render_entries()
+
+    def _on_cache_name_resolver_finished(self, worker) -> None:
+        if self._name_resolver is not worker:
+            return
+        self._name_resolver = None
+        if not self._name_resolution_disabled:
+            QTimer.singleShot(100, self._resolve_cache_names)
+
+    def _stop_name_resolver(self) -> None:
+        worker = self._name_resolver
+        if worker is None:
+            return
+        try:
+            if worker.isRunning():
+                worker.stop()
+                worker.wait(3000)
+        except RuntimeError:
+            pass
+        self._name_resolver = None
 
     def _selected_pair(self) -> tuple[str, str]:
         target = self.target_edit.text().strip().lower()
