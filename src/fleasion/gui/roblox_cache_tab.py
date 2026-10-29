@@ -40,6 +40,7 @@ from ..database.roblox_cache_store import (
     RobloxCacheStore,
     default_roblox_cache_root,
     detect_roblox_payload_kind,
+    decompress_roblox_payload,
     split_rbxh_entry,
 )
 from ..utils import log_buffer
@@ -772,6 +773,9 @@ class RobloxCacheTab(QWidget):
         try:
             data, _storage_mode = self.store._get_entry_data(entry.entry_id)
             _url, payload, _has_header = split_rbxh_entry(data)
+            payload = decompress_roblox_payload(
+                payload, max_output_bytes=_MAX_PREVIEW_BYTES
+            )
             kind = detect_roblox_payload_kind(payload)
             if kind in _IMAGE_KINDS:
                 from ..cache.cache_viewer import ImageLoaderThread
@@ -853,10 +857,23 @@ class RobloxCacheTab(QWidget):
                 self.preview_text.setPlainText(payload[:200_000].decode('utf-8', errors='replace'))
                 self.preview_stack.setCurrentWidget(self.preview_text)
             else:
-                self.preview_info.setText(
-                    f'{kind or entry.kind} payload detected. No built-in preview is available.'
-                )
-                self.preview_stack.setCurrentWidget(self.preview_info)
+                sample = payload[:4096]
+                lines = [
+                    f'Unrecognized payload · {len(payload):,} bytes',
+                    f'Showing the first {len(sample):,} byte(s) as hexadecimal and ASCII.',
+                    '',
+                ]
+                for offset in range(0, len(sample), 16):
+                    block = sample[offset:offset + 16]
+                    hex_part = ' '.join(f'{byte:02x}' for byte in block)
+                    ascii_part = ''.join(
+                        chr(byte) if 32 <= byte < 127 else '.' for byte in block
+                    )
+                    lines.append(f'{offset:08x}  {hex_part:<47}  |{ascii_part}|')
+                if len(payload) > len(sample):
+                    lines.append(f'… {len(payload) - len(sample):,} byte(s) omitted')
+                self.preview_text.setPlainText('\\n'.join(lines))
+                self.preview_stack.setCurrentWidget(self.preview_text)
         except Exception as exc:
             self.preview_info.setText(f'Preview failed: {type(exc).__name__}: {exc}')
             self.preview_stack.setCurrentWidget(self.preview_info)
