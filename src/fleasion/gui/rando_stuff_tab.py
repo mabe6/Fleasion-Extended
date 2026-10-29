@@ -960,7 +960,7 @@ class RandoStuffTab(QWidget):
 
         self._rejoin_section.add_widget(rejoin_body)
         self._rejoin_proxy_gate = ProxyGate(self._rejoin_section, compact=True)
-        root.addWidget(self._rejoin_proxy_gate)
+        # Reserved-server rejoin needs the removed HTTP interception layer.
 
         self._multi_instance_section = CollapsibleSection(
             tr('ui.gui.rando_stuff_tab.multi_instance'),
@@ -1129,7 +1129,7 @@ class RandoStuffTab(QWidget):
             self._username_spoofer_section,
             compact=True,
         )
-        root.addWidget(self._username_spoofer_proxy_gate)
+        # Username spoofing depends on the removed HTTP interception layer.
 
         self._animation_converter_section = CollapsibleSection(
             tr('ui.gui.rando_stuff_tab.r6_r15_animation_converter'),
@@ -1209,7 +1209,7 @@ class RandoStuffTab(QWidget):
             self._subplace_blacklist_section,
             compact=True,
         )
-        root.addWidget(self._subplace_blacklist_proxy_gate)
+        # Subplace blocking/stalling depends on the removed HTTP interception layer.
 
         # Give all spare viewport height to the trailing spacer.  Without a
         # positive stretch factor QVBoxLayout distributes that space back

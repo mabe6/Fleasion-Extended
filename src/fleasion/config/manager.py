@@ -260,6 +260,7 @@ DEFAULT_SETTINGS = {
     'audio_volume': 70,  # 0-100
     'always_on_top': False,
     'open_dashboard_on_launch': True,
+    'asset_database_preview_enabled': True,
     'first_time_setup_complete': False,
     **DEFAULT_DATABASE_MODE_SETTINGS,
     'proxy_mode': 'env',

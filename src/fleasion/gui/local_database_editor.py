@@ -143,10 +143,13 @@ class LocalDatabaseEditorWidget(QWidget):
         splitter.addWidget(left)
 
         self.tabs = QTabWidget()
+        self.tabs.setDocumentMode(True)
         self.asset_explorer = DatabaseAssetExplorer(self.tabs, config_manager=self.config_manager)
         self.tabs.addTab(self.asset_explorer, 'Asset Explorer')
         splitter.addWidget(self.tabs)
-        splitter.setSizes([290, 890])
+        splitter.setSizes([230, 950])
+        splitter.setStretchFactor(0, 0)
+        splitter.setStretchFactor(1, 1)
 
         self.data_tab = QWidget()
         data_layout = QVBoxLayout(self.data_tab)

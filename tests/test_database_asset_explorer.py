@@ -150,3 +150,38 @@ with tempfile.TemporaryDirectory() as folder:
     env = os.environ.copy()
     env['QT_QPA_PLATFORM'] = 'offscreen'
     subprocess.run([sys.executable, '-c', code], check=True, env=env)
+
+
+def test_detect_kind_recognizes_ktx1_and_ktx2_texture_headers() -> None:
+    ktx1 = b'\\xabKTX 11\\xbb\\r\\n\\x1a\\n' + bytes(64)
+    ktx2 = b'\\xabKTX 20\\xbb\\r\\n\\x1a\\n' + bytes(64)
+    assert _detect_kind(ktx1)[0] == 'ktx'
+    assert _detect_kind(ktx2)[0] == 'ktx'
+
+
+def test_asset_preview_preference_can_be_disabled_and_restored() -> None:
+    code = r"""
+from types import SimpleNamespace
+from PyQt6.QtWidgets import QApplication
+from fleasion.gui.database_asset_explorer import DatabaseAssetExplorer
+
+app = QApplication([])
+settings = {'asset_database_preview_enabled': True}
+save_calls = []
+config = SimpleNamespace(settings=settings, save=lambda: save_calls.append(True))
+widget = DatabaseAssetExplorer(config_manager=config)
+try:
+    widget.set_preview_enabled(False)
+    assert widget._preview_enabled is False
+    assert settings['asset_database_preview_enabled'] is False
+    widget.set_preview_enabled(True)
+    assert widget._preview_enabled is True
+    assert settings['asset_database_preview_enabled'] is True
+    assert len(save_calls) == 2
+finally:
+    widget.close()
+    app.processEvents()
+"""
+    env = os.environ.copy()
+    env['QT_QPA_PLATFORM'] = 'offscreen'
+    subprocess.run([sys.executable, '-c', code], check=True, env=env)

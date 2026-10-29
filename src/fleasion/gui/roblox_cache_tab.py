@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import json
 import sqlite3
 import time
 from pathlib import Path
 
 from PyQt6.QtCore import Qt
+from PyQt6.QtGui import QImage, QPixmap
 from PyQt6.QtWidgets import (
     QAbstractItemView,
     QComboBox,
@@ -19,6 +21,8 @@ from PyQt6.QtWidgets import (
     QMessageBox,
     QPlainTextEdit,
     QPushButton,
+    QSplitter,
+    QStackedWidget,
     QTableWidget,
     QTableWidgetItem,
     QTabWidget,
@@ -37,6 +41,10 @@ from ..database.roblox_cache_store import (
     split_rbxh_entry,
 )
 from ..utils import log_buffer
+
+
+_MAX_PREVIEW_BYTES = 50 * 1024 * 1024
+_IMAGE_KINDS = {'png', 'jpg', 'jpeg', 'bmp', 'gif', 'webp', 'tiff', 'ico', 'dds', 'ktx', 'psd'}
 
 
 def _format_size(value: int | None) -> str:
@@ -59,12 +67,25 @@ class RobloxCacheTab(QWidget):
         *,
         config_manager=None,
         additional_tab: QWidget | None = None,
+        view_mode: str = 'all',
     ):
         super().__init__(parent)
+        if view_mode not in {'all', 'swaps', 'slots'}:
+            raise ValueError(f'Unsupported cache tab view mode: {view_mode}')
+        if additional_tab is not None and view_mode != 'all':
+            raise ValueError('additional_tab is only supported when view_mode="all".')
         self.config_manager = config_manager
+        self._view_mode = view_mode
         self.store = RobloxCacheStore()
         self.entries: list[RobloxCacheEntry] = []
         self.entries_by_id: dict[str, RobloxCacheEntry] = {}
+        self._image_loader = None
+        self._mesh_loader = None
+        self._current_preview_image: QImage | None = None
+        self._current_preview_request_id = ''
+        self._mesh_panel = None
+        self._model_panel = None
+        self._animation_panel = None
         settings = getattr(config_manager, 'settings', {})
         self._probe_header_enabled = bool(
             settings.get('show_cache_probe_header', False)
@@ -216,11 +237,43 @@ class RobloxCacheTab(QWidget):
         entries_layout.addLayout(path_row)
 
         search_row = QHBoxLayout()
-        search_row.addWidget(QLabel('Filter:'))
+        search_row.addWidget(QLabel('Search:'))
         self.search_edit = QLineEdit()
-        self.search_edit.setPlaceholderText('Cache ID, asset ID, type or URL')
+        self.search_edit.setPlaceholderText('Cache ID, asset ID, type, swap status or URL…')
+        self.search_edit.setClearButtonEnabled(True)
         self.search_edit.textChanged.connect(self._render_entries)
-        search_row.addWidget(self.search_edit, 1)
+        search_row.addWidget(self.search_edit, 2)
+
+        self.kind_filter_combo = QComboBox()
+        for label, value in (
+            ('All types', 'all'),
+            ('Images / textures', 'images'),
+            ('KTX textures', 'ktx'),
+            ('Meshes', 'mesh'),
+            ('Roblox models', 'models'),
+            ('Animations', 'animations'),
+            ('Audio', 'audio'),
+            ('Fonts', 'font'),
+            ('JSON', 'json'),
+            ('Other', 'other'),
+        ):
+            self.kind_filter_combo.addItem(label, value)
+        self.kind_filter_combo.currentIndexChanged.connect(self._render_entries)
+        search_row.addWidget(self.kind_filter_combo)
+
+        self.slot_status_filter = QComboBox()
+        for label, value in (
+            ('All slots', 'all'),
+            ('Unmodified', 'unmodified'),
+            ('Active swaps', 'swapped'),
+            ('Changed since swap', 'changed'),
+        ):
+            self.slot_status_filter.addItem(label, value)
+        self.slot_status_filter.currentIndexChanged.connect(self._render_entries)
+        search_row.addWidget(self.slot_status_filter)
+
+        self.entries_count_label = QLabel('0 entries')
+        search_row.addWidget(self.entries_count_label)
         entries_layout.addLayout(search_row)
 
         self.table = QTableWidget(0, 9)
@@ -235,7 +288,56 @@ class RobloxCacheTab(QWidget):
         self.table.verticalHeader().hide()
         self.table.horizontalHeader().setStretchLastSection(True)
         self.table.itemDoubleClicked.connect(self._set_selected_as_target)
-        entries_layout.addWidget(self.table, 1)
+        self.table.itemSelectionChanged.connect(self._selection_changed)
+
+        self.entries_splitter = QSplitter(Qt.Orientation.Horizontal)
+        self.entries_splitter.setChildrenCollapsible(False)
+        table_host = QWidget()
+        table_host_layout = QVBoxLayout(table_host)
+        table_host_layout.setContentsMargins(0, 0, 0, 0)
+        table_host_layout.addWidget(self.table, 1)
+        self.entries_splitter.addWidget(table_host)
+
+        self.preview_panel = QWidget()
+        preview_layout = QVBoxLayout(self.preview_panel)
+        preview_layout.setContentsMargins(8, 4, 4, 4)
+        preview_layout.setSpacing(5)
+
+        self.preview_title = QLabel('Cache Slot Preview')
+        self.preview_title.setStyleSheet('font-weight: 600;')
+        preview_layout.addWidget(self.preview_title)
+
+        self.preview_details = QLabel('Select a cache slot to preview its contents.')
+        self.preview_details.setWordWrap(True)
+        self.preview_details.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextSelectableByMouse
+        )
+        preview_layout.addWidget(self.preview_details)
+
+        self.preview_stack = QStackedWidget()
+        self.preview_info = QLabel(
+            'Select a cache slot to preview an image, KTX texture, mesh, animation or model. '
+            'Large payloads are skipped for safety.'
+        )
+        self.preview_info.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.preview_info.setWordWrap(True)
+        self.preview_stack.addWidget(self.preview_info)
+
+        self.preview_image = QLabel()
+        self.preview_image.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.preview_image.setMinimumSize(220, 200)
+        self.preview_stack.addWidget(self.preview_image)
+
+        self.preview_text = QPlainTextEdit()
+        self.preview_text.setReadOnly(True)
+        self.preview_text.setLineWrapMode(QPlainTextEdit.LineWrapMode.NoWrap)
+        self.preview_stack.addWidget(self.preview_text)
+        preview_layout.addWidget(self.preview_stack, 1)
+
+        self.preview_panel.setMinimumWidth(250)
+        self.entries_splitter.addWidget(self.preview_panel)
+        self.entries_splitter.setSizes([720, 320])
+        entries_layout.addWidget(self.entries_splitter, 1)
 
         inventory_actions = QHBoxLayout()
         set_target = QPushButton('Selected → target ID')
@@ -265,6 +367,22 @@ class RobloxCacheTab(QWidget):
         self.set_probe_header_enabled(self._probe_header_enabled)
 
         self.pages.addTab(self.entries_page, 'Cache Slots')
+
+        # In the dashboard these pages are promoted to sibling top-level tabs.
+        # Keep the combined inner tab widget as the default for existing callers/tests.
+        if self._view_mode != 'all':
+            selected_page = self.swaps_page if self._view_mode == 'swaps' else self.entries_page
+            selected_index = self.pages.indexOf(selected_page)
+            if selected_index >= 0:
+                self.pages.removeTab(selected_index)
+            root.removeWidget(self.pages)
+            self.pages.hide()
+            selected_page.setParent(self)
+            root.insertWidget(0, selected_page, 1)
+            if self._view_mode == 'slots':
+                # Share the scan/operation status row with the standalone Cache Slots view.
+                self.status_label.setParent(self)
+                root.addWidget(self.status_label)
 
     def set_probe_header_enabled(self, enabled: bool) -> None:
         """Show or hide the optional header-probe controls to save vertical space."""
@@ -327,21 +445,63 @@ class RobloxCacheTab(QWidget):
 
     def _visible_entries(self) -> list[RobloxCacheEntry]:
         query = self.search_edit.text().strip().casefold()
-        if not query:
-            return self.entries
-        return [
-            entry for entry in self.entries
-            if query in entry.entry_id.casefold()
-            or query in entry.asset_id.casefold()
-            or query in entry.kind.casefold()
-            or query in entry.url.casefold()
-            or query in entry.swap_status.casefold()
-        ]
+        kind_filter = self.kind_filter_combo.currentData()
+        status_filter = self.slot_status_filter.currentData()
+        image_kinds = _IMAGE_KINDS
+        model_kinds = {'rbxm', 'xml'}
+        animation_kinds = {'anim', 'curve-anim'}
+        audio_kinds = {'ogg', 'mp3'}
+
+        visible: list[RobloxCacheEntry] = []
+        for entry in self.entries:
+            if query and not any(
+                query in value.casefold()
+                for value in (
+                    entry.entry_id,
+                    entry.asset_id,
+                    entry.kind,
+                    entry.url,
+                    entry.swap_status,
+                    entry.storage_mode,
+                )
+            ):
+                continue
+
+            if kind_filter == 'images' and entry.kind not in image_kinds:
+                continue
+            if kind_filter == 'ktx' and entry.kind != 'ktx':
+                continue
+            if kind_filter == 'mesh' and entry.kind != 'mesh':
+                continue
+            if kind_filter == 'models' and entry.kind not in model_kinds:
+                continue
+            if kind_filter == 'animations' and entry.kind not in animation_kinds:
+                continue
+            if kind_filter == 'audio' and entry.kind not in audio_kinds:
+                continue
+            if kind_filter == 'font' and entry.kind != 'font':
+                continue
+            if kind_filter == 'json' and entry.kind != 'json':
+                continue
+            if kind_filter == 'other' and entry.kind in (
+                image_kinds | model_kinds | animation_kinds | audio_kinds | {'font', 'json', 'mesh'}
+            ):
+                continue
+
+            if status_filter == 'unmodified' and entry.swap_status:
+                continue
+            if status_filter == 'swapped' and entry.swap_status != 'swapped':
+                continue
+            if status_filter == 'changed' and entry.swap_status != 'reverted':
+                continue
+            visible.append(entry)
+        return visible
 
     def _render_entries(self, *_args) -> None:
+        visible_entries = self._visible_entries()
         self.table.setUpdatesEnabled(False)
         self.table.setRowCount(0)
-        for entry in self._visible_entries():
+        for entry in visible_entries:
             row = self.table.rowCount()
             self.table.insertRow(row)
             values = [
@@ -366,6 +526,227 @@ class RobloxCacheTab(QWidget):
         self.table.resizeColumnsToContents()
         self.table.setColumnWidth(0, 270)
         self.table.setColumnWidth(8, 400)
+        self.entries_count_label.setText(
+            f'{len(visible_entries):,} / {len(self.entries):,} entries'
+            if len(visible_entries) != len(self.entries) else f'{len(self.entries):,} entries'
+        )
+
+    def _selection_changed(self) -> None:
+        entry_id = self._selected_entry_id()
+        if not entry_id:
+            self._reset_slot_preview()
+            return
+        entry = self.entries_by_id.get(entry_id)
+        if entry is None:
+            self._reset_slot_preview()
+            return
+        self.preview_title.setText(f'{entry.kind.upper()} · {entry.entry_id[:12]}')
+        details = [
+            f'Asset ID: {entry.asset_id or "not found"}',
+            f'Type: {entry.kind}',
+            f'File/content size: {_format_size(entry.file_size)}',
+            f'Database size: {_format_size(entry.database_size)}',
+            f'Swap status: {entry.swap_status or "unmodified"}',
+            f'Storage: {entry.storage_mode}',
+        ]
+        if entry.url:
+            details.append(f'URL: {entry.url}')
+        self.preview_details.setText('\n'.join(details))
+        self._load_slot_preview(entry)
+
+    def _stop_slot_worker(self, attribute: str) -> None:
+        worker = getattr(self, attribute, None)
+        if worker is None:
+            return
+        try:
+            stop = getattr(worker, 'stop', None)
+            if callable(stop):
+                stop()
+            worker.quit()
+            worker.wait()
+            worker.deleteLater()
+        except RuntimeError:
+            pass
+        setattr(self, attribute, None)
+
+    def _reset_slot_preview(self) -> None:
+        self._stop_slot_worker('_image_loader')
+        self._stop_slot_worker('_mesh_loader')
+        if self._animation_panel is not None:
+            try:
+                self._animation_panel.stop()
+                self._animation_panel.clear_animation()
+                self._animation_panel.hide()
+            except Exception:
+                pass
+        if self._model_panel is not None:
+            try:
+                self._model_panel.clear()
+                self._model_panel.hide()
+            except Exception:
+                pass
+        if self._mesh_panel is not None:
+            try:
+                self._mesh_panel.hide()
+            except Exception:
+                pass
+        self.preview_image.clear()
+        self.preview_text.clear()
+        self._current_preview_image = None
+        self.preview_stack.setCurrentWidget(self.preview_info)
+
+    def _load_slot_preview(self, entry: RobloxCacheEntry) -> None:
+        self._reset_slot_preview()
+        self._current_preview_request_id = entry.entry_id
+        if entry.file_size > _MAX_PREVIEW_BYTES:
+            self.preview_info.setText(
+                f'This entry is {_format_size(entry.file_size)}. Preview is skipped for safety.'
+            )
+            return
+
+        try:
+            data, _storage_mode = self.store._get_entry_data(entry.entry_id)
+            _url, payload, _has_header = split_rbxh_entry(data)
+            kind = detect_roblox_payload_kind(payload)
+            if kind in _IMAGE_KINDS:
+                from ..cache.cache_viewer import ImageLoaderThread
+
+                self.preview_info.setText('Decoding image / KTX texture…')
+                self._image_loader = ImageLoaderThread(payload)
+                self._image_loader.image_ready.connect(
+                    lambda rgba, width, height, request_id=entry.entry_id:
+                    self._on_slot_image_ready(request_id, rgba, width, height)
+                )
+                self._image_loader.error.connect(
+                    lambda error, request_id=entry.entry_id:
+                    self._on_slot_preview_error(request_id, error)
+                )
+                self.preview_stack.setCurrentWidget(self.preview_info)
+                self._image_loader.start()
+            elif kind == 'mesh':
+                from ..cache.cache_viewer import MeshLoaderThread
+
+                self.preview_info.setText('Preparing 3D mesh preview…')
+                self._mesh_loader = MeshLoaderThread(
+                    payload,
+                    entry.asset_id or entry.entry_id[:12],
+                )
+                self._mesh_loader.mesh_ready.connect(
+                    lambda obj_text, request_id=entry.entry_id:
+                    self._on_slot_mesh_ready(request_id, obj_text)
+                )
+                self._mesh_loader.error.connect(
+                    lambda error, request_id=entry.entry_id:
+                    self._on_slot_preview_error(request_id, error)
+                )
+                self.preview_stack.setCurrentWidget(self.preview_info)
+                self._mesh_loader.start()
+            elif kind in {'anim', 'curve-anim'}:
+                from ..cache.animation_viewer import AnimationViewerPanel
+
+                if self._animation_panel is None:
+                    self._animation_panel = AnimationViewerPanel(config_manager=self.config_manager)
+                    self.preview_stack.addWidget(self._animation_panel)
+                if self._animation_panel.load_animation(payload):
+                    self.preview_stack.setCurrentWidget(self._animation_panel)
+                else:
+                    self.preview_info.setText(
+                        'Animation detected, but no playable keyframes could be loaded.'
+                    )
+                    self.preview_stack.setCurrentWidget(self.preview_info)
+            elif kind in {'rbxm', 'xml'} and (
+                payload.startswith(b'<roblox!') or payload.lstrip().startswith((b'<roblox', b'<?xml'))
+            ):
+                from ..cache.rbxm_preview import RbxmPreviewWidget
+
+                if self._model_panel is None:
+                    self._model_panel = RbxmPreviewWidget()
+                    self._model_panel.tree.setEditTriggers(
+                        QAbstractItemView.EditTrigger.NoEditTriggers
+                    )
+                    self._model_panel.properties_table.setEditTriggers(
+                        QAbstractItemView.EditTrigger.NoEditTriggers
+                    )
+                    self._model_panel.tree.setContextMenuPolicy(Qt.ContextMenuPolicy.NoContextMenu)
+                    self._model_panel.properties_table.setContextMenuPolicy(
+                        Qt.ContextMenuPolicy.NoContextMenu
+                    )
+                    self._model_panel.add_child_btn.setEnabled(False)
+                    self._model_panel.add_property_btn.setEnabled(False)
+                    self.preview_stack.addWidget(self._model_panel)
+                self._model_panel.load_bytes(payload, entry.asset_id or entry.entry_id[:12])
+                self.preview_stack.setCurrentWidget(self._model_panel)
+            elif kind == 'json' or payload.lstrip().startswith((b'{', b'[')):
+                try:
+                    parsed = json.loads(payload.decode('utf-8-sig'))
+                    text = json.dumps(parsed, ensure_ascii=False, indent=2)
+                except (UnicodeDecodeError, json.JSONDecodeError):
+                    text = payload[:50_000].decode('utf-8', errors='replace')
+                self.preview_text.setPlainText(text[:200_000])
+                self.preview_stack.setCurrentWidget(self.preview_text)
+            elif kind == 'xml':
+                self.preview_text.setPlainText(payload[:200_000].decode('utf-8', errors='replace'))
+                self.preview_stack.setCurrentWidget(self.preview_text)
+            else:
+                self.preview_info.setText(
+                    f'{kind or entry.kind} payload detected. No built-in preview is available.'
+                )
+                self.preview_stack.setCurrentWidget(self.preview_info)
+        except Exception as exc:
+            self.preview_info.setText(f'Preview failed: {type(exc).__name__}: {exc}')
+            self.preview_stack.setCurrentWidget(self.preview_info)
+
+    def _on_slot_image_ready(
+        self, request_id: str, rgba: bytes, width: int, height: int
+    ) -> None:
+        if request_id != self._current_preview_request_id:
+            return
+        image = QImage(rgba, width, height, width * 4, QImage.Format.Format_RGBA8888).copy()
+        if image.isNull():
+            self._on_slot_preview_error(request_id, 'Image decoder returned an empty image.')
+            return
+        self._current_preview_image = image
+        self._scale_slot_preview()
+        self.preview_stack.setCurrentWidget(self.preview_image)
+
+    def _on_slot_mesh_ready(self, request_id: str, obj_text: str) -> None:
+        if request_id != self._current_preview_request_id:
+            return
+        try:
+            if self._mesh_panel is None:
+                from ..cache.obj_viewer import ObjViewerPanel
+
+                self._mesh_panel = ObjViewerPanel(self.preview_panel, config_manager=self.config_manager)
+                self.preview_stack.addWidget(self._mesh_panel)
+            self._mesh_panel.load_obj(obj_text, request_id[:12])
+            self.preview_stack.setCurrentWidget(self._mesh_panel)
+        except Exception as exc:
+            self._on_slot_preview_error(request_id, str(exc))
+
+    def _on_slot_preview_error(self, request_id: str, error: str) -> None:
+        if request_id != self._current_preview_request_id:
+            return
+        self.preview_info.setText(f'Preview could not be loaded: {error}')
+        self.preview_stack.setCurrentWidget(self.preview_info)
+
+    def _scale_slot_preview(self) -> None:
+        if self._current_preview_image is None:
+            return
+        target = self.preview_image.size()
+        if target.width() < 1 or target.height() < 1:
+            return
+        self.preview_image.setPixmap(
+            QPixmap.fromImage(self._current_preview_image).scaled(
+                target,
+                Qt.AspectRatioMode.KeepAspectRatio,
+                Qt.TransformationMode.SmoothTransformation,
+            )
+        )
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        if self.preview_stack.currentWidget() is self.preview_image:
+            self._scale_slot_preview()
 
     def _render_active_swaps(self, *_args) -> None:
         """Render saved swap state in the same list-first style as Fleasion profiles."""

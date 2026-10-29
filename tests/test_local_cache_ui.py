@@ -10,6 +10,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from PyQt6.QtWidgets import QApplication
 
 from fleasion.gui import roblox_cache_tab as cache_tab_module
+from fleasion.database.roblox_cache_store import RobloxCacheEntry
 
 
 _APP = None
@@ -83,6 +84,62 @@ def test_local_db_opens_on_active_swaps_with_pasteable_ids_and_optional_probe(
         widget.set_probe_header_enabled(False)
         assert widget.probe_button.isHidden()
         assert widget.output.isHidden()
+    finally:
+        widget.close()
+        app.processEvents()
+
+
+def test_cache_slots_view_has_preview_and_type_status_filters(monkeypatch, tmp_path):
+    app = _qapp()
+
+    class FakeStore:
+        def __init__(self, *_args, **_kwargs):
+            self.root = tmp_path
+
+        def _manifest(self):
+            return {}
+
+        def swap_status(self, _entry_id):
+            return ''
+
+    monkeypatch.setattr(cache_tab_module, 'RobloxCacheStore', FakeStore)
+    widget = cache_tab_module.RobloxCacheTab(
+        config_manager=SimpleNamespace(settings={}),
+        view_mode='slots',
+    )
+    try:
+        assert widget.layout().indexOf(widget.entries_page) >= 0
+        assert widget.layout().indexOf(widget.pages) == -1
+        assert widget.preview_panel is not None
+        assert widget.kind_filter_combo.findData('ktx') >= 0
+        assert widget.slot_status_filter.findData('swapped') >= 0
+
+        widget.entries = [
+            RobloxCacheEntry(
+                entry_id='a' * 32, file_size=1024, database_size=1024, modified_at=1,
+                kind='ktx', url='https://assets.invalid/?id=123', asset_id='123',
+                has_rbxh_header=False, swap_status='swapped', storage_mode='database',
+            ),
+            RobloxCacheEntry(
+                entry_id='b' * 32, file_size=128, database_size=128, modified_at=2,
+                kind='mesh', url='https://assets.invalid/?id=456', asset_id='456',
+                has_rbxh_header=False, swap_status='', storage_mode='file',
+            ),
+        ]
+        widget.entries_by_id = {entry.entry_id: entry for entry in widget.entries}
+        widget._render_entries()
+        assert widget.table.rowCount() == 2
+
+        widget.kind_filter_combo.setCurrentIndex(widget.kind_filter_combo.findData('ktx'))
+        assert widget.table.rowCount() == 1
+        assert widget.table.item(0, 2).text() == 'ktx'
+
+        widget.kind_filter_combo.setCurrentIndex(widget.kind_filter_combo.findData('all'))
+        widget.slot_status_filter.setCurrentIndex(
+            widget.slot_status_filter.findData('swapped')
+        )
+        assert widget.table.rowCount() == 1
+        assert widget.table.item(0, 0).text() == 'a' * 32
     finally:
         widget.close()
         app.processEvents()

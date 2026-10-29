@@ -420,6 +420,7 @@ class DatabaseAssetExplorer(QWidget):
         self._current_entry_id = ''
         self._current_image: QImage | None = None
         self._current_request_id = ''
+        self._preview_enabled = bool(self._settings().get('asset_database_preview_enabled', True))
         self._page_offset = 0
         self._scan_note = ''
         self._active_kinds = self._load_setting_set('local_db_asset_kinds', set()) & set(_KIND_ORDER)
@@ -633,10 +634,11 @@ class DatabaseAssetExplorer(QWidget):
         self.export_button.clicked.connect(self._export_payload)
         actions.addWidget(self.export_button)
         actions.addStretch()
-        preview_layout.addLayout(actions)
+        root.addLayout(actions)
 
         self.splitter.addWidget(self.preview_panel)
         self.splitter.setSizes([650, 300])
+        self.preview_panel.setMinimumWidth(240)
         self.preview_panel.hide()
         root.addWidget(self.splitter, 1)
 
@@ -1078,9 +1080,32 @@ class DatabaseAssetExplorer(QWidget):
             detail.append(f'Cache hits: {item.hits}')
         detail.append(f'Last accessed: {_format_atime(item.atime)}')
         self.preview_details.setText('\n'.join(detail))
+        if not self._preview_enabled:
+            self.preview_panel.hide()
+            self._reset_preview_widgets()
+            return
         self._load_preview(item)
 
-    def _stop_loader(self, attribute: str) -> None:
+    def set_preview_enabled(self, enabled: bool) -> None:
+        """Enable or hide the asset preview panel and persist the preference."""
+        self._preview_enabled = bool(enabled)
+        settings = self._settings()
+        settings['asset_database_preview_enabled'] = self._preview_enabled
+        save = getattr(self.config_manager, 'save', None)
+        if callable(save):
+            save()
+
+        if not self._preview_enabled:
+            self.preview_panel.hide()
+            self._reset_preview_widgets()
+            return
+
+        if self._selected_item() is not None:
+            self._selection_changed()
+        else:
+            self.preview_panel.hide()
+
+    def _stop_loader(self, attribute: str) -> None
         worker = getattr(self, attribute, None)
         if worker is None:
             return
