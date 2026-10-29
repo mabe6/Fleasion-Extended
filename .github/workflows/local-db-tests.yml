@@ -102,4 +102,4 @@ jobs:
           tests/test_local_database_mode.py
 
       - name: Run local database tests
-        run: uv run pytest -q tests/test_sqlite_browser.py tests/test_database_asset_explorer.py tests/test_proxy_tab_visibility.py tests/test_local_database_mode.py tests/test_roblox_cache_store.py tests/test_local_cache_ui.py tests/test_animation_payload.py
+        run: uv run pytest -q tests/test_sqlite_browser.py tests/test_database_asset_explorer.py tests/test_proxy_tab_visibility.py tests/test_local_database_mode.py tests/test_roblox_cache_store.py tests/test_local_cache_ui.py tests/test_animation_payload.py tests/test_animation_convert.py
