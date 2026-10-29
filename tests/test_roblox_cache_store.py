@@ -427,7 +427,7 @@ def test_scan_detects_zstd_encoded_fts_payload_without_changing_cache_bytes(tmp_
     import zstandard
 
     target_id = "c" * 32
-    inner_payload = b"\\x89PNG\\r\\n\\x1a\\n" + b"fixture-data-" * 24
+    inner_payload = b"\x89PNG\r\n\x1a\n" + b"fixture-data-" * 24
     compressed_payload = zstandard.ZstdCompressor().compress(inner_payload)
     url = (
         "https://fts.rbxcdn.com/v2/sc1/50f96a5fdc9efbfb12c8eaf2f1de071c"
