@@ -339,9 +339,9 @@ def test_animation_import_writes_converted_payload_and_reports_conversion(
 
     target_id = 'a' * 32
     target_payload = (
-        b'<roblox version="4"><Item class="KeyframeSequence"><Properties>'
-        b'<string name="Name">' + b'T' * 300 + b'</string>'
-        b'</Properties></Item></roblox>'
+        b'<roblox version="4"><Item class="KeyframeSequence"><Properties><string name="Name">'
+        + b'T' * 300
+        + b'</string></Properties></Item></roblox>'
     )
     converted_payload = (
         b'<roblox version="4"><Item class="KeyframeSequence">'
@@ -382,9 +382,9 @@ def test_animation_import_falls_back_to_original_when_conversion_fails(
 
     target_id = 'a' * 32
     target_payload = (
-        b'<roblox version="4"><Item class="KeyframeSequence"><Properties>'
-        b'<string name="Name">' + b'T' * 300 + b'</string>'
-        b'</Properties></Item></roblox>'
+        b'<roblox version="4"><Item class="KeyframeSequence"><Properties><string name="Name">'
+        + b'T' * 300
+        + b'</string></Properties></Item></roblox>'
     )
     original = _make_entry('https://example.test/?id=111', target_payload)
     source_payload = b'<roblox version="4"><Item class="CurveAnimation"/></roblox>'
