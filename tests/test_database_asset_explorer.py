@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import os
+import struct
 import subprocess
 import sys
+from types import SimpleNamespace
 
 from fleasion.gui.database_asset_explorer import (
     _asset_id_from_url,
@@ -46,6 +48,29 @@ def test_embedded_roblox_xml_name_is_readable() -> None:
         b'<string name="Name">wave</string></Properties></Item></roblox>'
     )
     assert _embedded_name(payload) == 'wave'
+
+
+def test_ktx2_bc7_uses_extended_decoder(monkeypatch) -> None:
+    import sys
+
+    from fleasion.cache.tools.ktx_to_png.ktx_to_png import KTX2_MAGIC, convert
+
+    # A valid 4x4, single-level KTX2 BC7 payload (Vulkan format 145).
+    header = (
+        KTX2_MAGIC
+        + struct.pack('<9I', 145, 1, 4, 4, 0, 0, 1, 1, 0)
+        + bytes(32)
+    )
+    level_index = struct.pack('<QQQ', 104, 16, 16)
+    ktx = header + level_index + bytes(16)
+    fake_decoder = SimpleNamespace(
+        decode_bc7=lambda _payload, width, height: bytes((0, 0, 255, 255)) * width * height
+    )
+    monkeypatch.setitem(sys.modules, 'texture2ddecoder', fake_decoder)
+
+    png = convert(ktx)
+    assert png is not None
+    assert png.startswith(b'\\x89PNG\\r\\n\\x1a\\n')
 
 
 def test_asset_url_extraction_and_type_groups() -> None:
@@ -91,8 +116,10 @@ with tempfile.TemporaryDirectory() as folder:
     assert widget.asset_table.rowCount() == 1
     assert widget.asset_table.item(0, 4).text() == 'PNG image'
     assert widget.asset_table.horizontalHeaderItem(1).text() == 'Name / hash'
-    assert widget.preview_panel.isHidden()
+    assert not widget.preview_panel.isHidden()
     widget.search_edit.setText('01010101')
+    assert widget.asset_table.rowCount() == 1
+    widget.search_edit.setText('type:png size:>32b')
     assert widget.asset_table.rowCount() == 1
     widget.search_edit.setText('no-such-asset')
     assert widget.asset_table.rowCount() == 0
