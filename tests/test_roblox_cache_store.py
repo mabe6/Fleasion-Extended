@@ -413,8 +413,8 @@ def test_animation_import_falls_back_to_original_when_conversion_fails(
 
 
 def test_payload_kind_detects_ktx_with_a_short_prefix() -> None:
-    ktx1 = b'\\xabKTX 11\\xbb\\r\\n\\x1a\\n' + bytes(64)
-    ktx2 = b'\\xabKTX 20\\xbb\\r\\n\\x1a\\n' + bytes(64)
+    ktx1 = b'\xabKTX 11\xbb\r\n\x1a\n' + bytes(64)
+    ktx2 = b'\xabKTX 20\xbb\r\n\x1a\n' + bytes(64)
 
     assert detect_roblox_payload_kind(ktx1) == 'ktx'
     assert detect_roblox_payload_kind(b'RBX-prefix:' + ktx1) == 'ktx'
