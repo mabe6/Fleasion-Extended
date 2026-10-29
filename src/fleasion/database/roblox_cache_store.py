@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any
 
 from ..utils import CONFIG_DIR
+from .animation_convert import AnimationConversionError, convert_animation_for_slot
 from .animation_payload import inspect_animation_payload
 from .sqlite_browser import SQLiteBrowser, SQLiteBrowserError, _is_roblox_process_running
 
@@ -858,18 +859,50 @@ class RobloxCacheStore:
         )
         _target_url, target_payload, _has_target_header = split_rbxh_entry(template)
         target_kind = detect_roblox_payload_kind(target_payload)
+        conversion_notes: tuple[str, ...] = ()
+        conversion_warning = ''
+        written_animation_report = animation_report
+
+        # Convert animation format and rig before deciding whether a type mismatch remains.
+        if source_kind in {'anim', 'curve-anim'} and target_kind in {'anim', 'curve-anim'}:
+            try:
+                conversion = convert_animation_for_slot(payload, target_payload)
+            except AnimationConversionError as exc:
+                # Keep the original payload available for the explicitly confirmed fallback path.
+                conversion_warning = str(exc)
+            else:
+                payload = conversion.payload
+                conversion_notes = conversion.notes
+                if conversion.changed:
+                    source_kind = detect_roblox_payload_kind(payload)
+                    written_animation_report = inspect_animation_payload(payload) or animation_report
+                    if (
+                        written_animation_report is not None
+                        and written_animation_report.requires_override
+                        and not allow_suspicious_animation
+                    ):
+                        raise RobloxCacheError(
+                            'Animation conversion produced payload with suspicious data. '
+                            'No cache bytes were changed. Review the converted animation or explicitly '
+                            'allow the import after review.\n\n'
+                            + written_animation_report.format()
+                        )
+
         if (
             source_kind != target_kind
             and source_kind != 'other'
             and target_kind != 'other'
             and not allow_type_mismatch
         ):
-            raise RobloxCacheError(
+            mismatch_message = (
                 f'Import type mismatch: target cache slot contains {target_kind}, '
-                f'but the selected file contains {source_kind}. Cache import does not convert '
-                'KeyframeSequence to CurveAnimation (or other formats). No cache bytes were changed. '
-                'Review the mismatch and explicitly allow it only if you intend to test this combination.'
+                f'but the selected file contains {source_kind}. No cache bytes were changed. '
+                'Review the mismatch and explicitly allow the import only if you intend to test '
+                'the original payload unchanged.'
             )
+            if conversion_warning:
+                mismatch_message += f'\n\nAnimation conversion warning: {conversion_warning}'
+            raise RobloxCacheError(mismatch_message)
 
         fields = self.detect_payload_length_fields()
         if not fields:
@@ -931,19 +964,31 @@ class RobloxCacheStore:
             f'entry {len(stored_data):,} bytes, files.size matches, storage={storage_mode}, '
             f'URL={stored_url}.'
         )
-        if animation_report is not None:
+        if written_animation_report is not None:
             verification += (
-                f' Animation preflight: {animation_report.root_class}, '
-                f'{animation_report.curve_count if animation_report.root_class == "CurveAnimation" else animation_report.keyframe_count} '
-                f'curves/keyframes, estimated duration={animation_report.duration_seconds!s} s.'
+                f' Animation preflight (written payload): {written_animation_report.root_class}, '
+                f'{written_animation_report.curve_count if written_animation_report.root_class == "CurveAnimation" else written_animation_report.keyframe_count} '
+                f'curves/keyframes, estimated duration={written_animation_report.duration_seconds!s} s.'
             )
-        if animation_report is not None and animation_report.findings:
+        if written_animation_report is not None and written_animation_report.findings:
             verification += (
                 ' Preflight warnings (imported anyway): '
-                + ' '.join(animation_report.findings)
+                + ' '.join(written_animation_report.findings)
             )
-        if animation_report is not None and animation_report.advisories:
-            verification += ' Advisory notes: ' + ' '.join(animation_report.advisories)
+        if written_animation_report is not None and written_animation_report.advisories:
+            verification += ' Advisory notes: ' + ' '.join(written_animation_report.advisories)
+        if animation_report is not None and animation_report is not written_animation_report:
+            if animation_report.findings:
+                verification += ' Source preflight warnings: ' + ' '.join(animation_report.findings)
+            if animation_report.advisories:
+                verification += ' Source advisory notes: ' + ' '.join(animation_report.advisories)
+        if conversion_notes:
+            verification += ' Animation conversion: ' + ' '.join(conversion_notes)
+        if conversion_warning:
+            verification += (
+                ' Animation conversion warning (original payload imported unchanged): '
+                + conversion_warning
+            )
         verification += (
             ' This verifies the local write only, not runtime playback. After testing, '
             'scan the cache again: “Changed since swap” means the cache entry no longer matches '

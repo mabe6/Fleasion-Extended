@@ -330,3 +330,42 @@ def test_swap_is_blocked_while_roblox_process_is_detected(tmp_path, monkeypatch)
 
     assert store.database_size(target_id) == len(store._entry_path(target_id).read_bytes())
     assert not (tmp_path / "app-config" / "FleasionNT" / "DatabaseBackups").exists()
+
+
+def test_animation_import_writes_converted_payload_and_reports_conversion(
+    tmp_path, monkeypatch
+):
+    from types import SimpleNamespace
+
+    target_id = 'a' * 32
+    target_payload = b'<roblox version="4"><Item class="KeyframeSequence"/></roblox>'
+    converted_payload = (
+        b'<roblox version="4"><Item class="KeyframeSequence">'
+        b'<string name="Converted">true</string></Item></roblox>'
+    )
+    entries = {
+        target_id: _make_entry('https://example.test/?id=111', target_payload),
+        'b' * 32: _make_entry('https://example.test/?id=222', b'B' * 350),
+        'c' * 32: _make_entry('https://example.test/?id=333', b'C' * 360),
+    }
+    store = _make_store(tmp_path, monkeypatch, entries)
+    import_path = tmp_path / 'curve-animation.rbxmx'
+    import_path.write_bytes(b'<roblox version="4"><Item class="CurveAnimation"/></roblox>')
+
+    monkeypatch.setattr(
+        store_module,
+        'convert_animation_for_slot',
+        lambda _payload, _target: SimpleNamespace(
+            payload=converted_payload,
+            notes=('Converted CurveAnimation to KeyframeSequence to match the cache slot.',),
+            changed=True,
+        ),
+    )
+
+    message = store.import_file(target_id, import_path, allow_type_mismatch=True)
+
+    _url, stored_payload, has_header = split_rbxh_entry(store._entry_path(target_id).read_bytes())
+    assert has_header is True
+    assert stored_payload == converted_payload
+    assert 'Animation conversion: Converted CurveAnimation to KeyframeSequence' in message
+    assert 'Read-back verification: OK' in message

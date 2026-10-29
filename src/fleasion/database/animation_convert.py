@@ -68,7 +68,7 @@ def _rig_convert(xml_data: bytes, target_rig: str) -> bytes:
 
 
 def convert_animation_for_slot(payload: bytes, target_payload: bytes) -> AnimationConversion:
-    """Return ``payload`` converted to the animation type and rig of ``target_payload``.
+    """Return payload converted to the type and rig of target_payload.
 
     Parameters
     ----------
@@ -87,33 +87,33 @@ def convert_animation_for_slot(payload: bytes, target_payload: bytes) -> Animati
     AnimationConversionError
         If a conversion step fails or does not produce the requested type.
     """
-    from ..utils.anim_converter import (
-        detect_player_rig,
-        detect_rig,
-        is_curve_animation,
-        rbxm_to_rbxmx,
-    )
-    from ..utils.r15_to_r6 import curve_anim_to_keyframe_xml, keyframe_to_curve_anim
-
-    source = _strip_cdn_prefix(payload)
-    source_is_curve = is_curve_animation(source)
-    target_is_curve = is_curve_animation(target_payload)
-
-    source_rig = detect_rig(source)
-    target_rig = detect_rig(target_payload)
-    if target_rig == 'unknown':
-        # Mixed or tool animations still target a player rig, so use the lenient detector
-        target_rig = detect_player_rig(target_payload)
-    if target_is_curve and target_rig == 'unknown':
-        target_rig = source_rig if source_rig != 'unknown' else 'R15'
-
-    needs_rig = target_rig != 'unknown' and source_rig != 'unknown' and source_rig != target_rig
-    needs_type = source_is_curve != target_is_curve
-    if not needs_rig and not needs_type:
-        return AnimationConversion(payload=payload)
-
     notes: list[str] = []
     try:
+        from ..utils.anim_converter import (
+            detect_player_rig,
+            detect_rig,
+            is_curve_animation,
+            rbxm_to_rbxmx,
+        )
+        from ..utils.r15_to_r6 import curve_anim_to_keyframe_xml, keyframe_to_curve_anim
+
+        source = _strip_cdn_prefix(payload)
+        source_is_curve = is_curve_animation(source)
+        target_is_curve = is_curve_animation(target_payload)
+
+        source_rig = detect_rig(source)
+        target_rig = detect_rig(target_payload)
+        if target_rig == 'unknown':
+            # Mixed or tool animations still target a player rig, so use the lenient detector
+            target_rig = detect_player_rig(target_payload)
+        if target_is_curve and target_rig == 'unknown':
+            target_rig = source_rig if source_rig != 'unknown' else 'R15'
+
+        needs_rig = target_rig != 'unknown' and source_rig != 'unknown' and source_rig != target_rig
+        needs_type = source_is_curve != target_is_curve
+        if not needs_rig and not needs_type:
+            return AnimationConversion(payload=payload)
+
         data = rbxm_to_rbxmx(source) if source[:8] == _BINARY_MAGIC else source
         if source_is_curve:
             data = curve_anim_to_keyframe_xml(data)
@@ -140,3 +140,4 @@ def convert_animation_for_slot(payload: bytes, target_payload: bytes) -> Animati
         )
     log.info('Animation converted for cache slot: %s', '; '.join(notes))
     return AnimationConversion(payload=data, notes=tuple(notes), changed=True)
+

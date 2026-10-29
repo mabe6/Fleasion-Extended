@@ -27,6 +27,7 @@ from PyQt6.QtWidgets import (
 )
 
 from ..database.animation_payload import inspect_animation_payload
+from ..database.animation_convert import AnimationConversionError, convert_animation_for_slot
 from ..database.roblox_cache_store import (
     RobloxCacheEntry,
     RobloxCacheError,
@@ -474,7 +475,8 @@ class RobloxCacheTab(QWidget):
         if {target_kind, source_kind}.issubset({'anim', 'curve-anim'}):
             detail = (
                 f'Target is {target_kind}; source is {source_kind}. Both are animation formats, '
-                'but KeyframeSequence and CurveAnimation are not converted by this importer.'
+                'the importer will attempt to convert the source to the target slot’s animation format and rig. '
+                'If conversion fails, continuing will import the original payload unchanged and report a warning.'
             )
         else:
             detail = f'Target looks like {target_kind}; source looks like {source_kind}.'
@@ -573,6 +575,27 @@ class RobloxCacheTab(QWidget):
             ):
                 return
 
+            conversion_preview_text = ''
+            if source_kind in {'anim', 'curve-anim'} and target_kind in {'anim', 'curve-anim'}:
+                try:
+                    conversion_preview = convert_animation_for_slot(payload, target_payload)
+                except AnimationConversionError as exc:
+                    conversion_preview_text = (
+                        'Automatic animation conversion failed. Continuing will import the original '
+                        'payload unchanged and report the failure.\n'
+                        f'Conversion warning: {exc}'
+                    )
+                else:
+                    if conversion_preview.changed:
+                        note_text = '\n'.join(f'• {note}' for note in conversion_preview.notes)
+                        if not note_text:
+                            note_text = 'Converted the animation payload to match the target slot.'
+                        conversion_preview_text = 'Animation conversion preview:\n' + note_text
+                    else:
+                        conversion_preview_text = (
+                            'Animation conversion preview: no type or rig conversion is needed.'
+                        )
+
             animation_report = (
                 inspect_animation_payload(payload)
                 if source_kind in {'anim', 'curve-anim'}
@@ -591,6 +614,7 @@ class RobloxCacheTab(QWidget):
                 'Confirm file import',
                 f'Use {path.name} as the payload for cache slot {target_id}?\n\n'
                 f'{report_text}\n\n'
+                + (f'{conversion_preview_text}\n\n' if conversion_preview_text else '')
                 + (
                     'Warnings above do not stop the import: the file will be written as it is, '
                     'and a damaged animation may play wrongly or not at all.\n\n'
