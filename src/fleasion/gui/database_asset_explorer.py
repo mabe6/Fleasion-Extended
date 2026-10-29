@@ -639,7 +639,8 @@ class DatabaseAssetExplorer(QWidget):
         self.splitter.addWidget(self.preview_panel)
         self.splitter.setSizes([650, 300])
         self.preview_panel.setMinimumWidth(240)
-        self.preview_panel.hide()
+        if not self._preview_enabled:
+            self.preview_panel.hide()
         root.addWidget(self.splitter, 1)
 
         self.status_label = QLabel(
@@ -913,7 +914,17 @@ class DatabaseAssetExplorer(QWidget):
         return int(self.page_size.currentData() or 250)
 
     def _visible_items(self) -> list[_AssetItem]:
-        query = self.search_edit.text().strip().casefold()
+        raw_query = self.search_edit.text().strip()
+        token_re = re.compile(r'(?P<key>[A-Za-z]+):(?P<value>"[^"]+"|\S+)')
+        structured: list[tuple[str, str]] = []
+        residue = raw_query
+        supported = {'name', 'creator', 'type', 'size', 'dbsize', 'id', 'asset', 'url', 'hash', 'cached_at'}
+        for match in token_re.finditer(raw_query):
+            key = match.group('key').casefold()
+            if key in supported:
+                structured.append((key, match.group('value').strip('"')))
+                residue = residue.replace(match.group(0), ' ', 1)
+        query = ' '.join(residue.split()).casefold()
         result = []
         for item in self.items:
             if (
@@ -922,22 +933,43 @@ class DatabaseAssetExplorer(QWidget):
                 and item.kind not in self._active_kinds
             ):
                 continue
+
+            fields = {
+                'name': _display_name(item),
+                'creator': item.creator_name or '',
+                'asset': item.asset_id or '',
+                'asset_id': item.asset_id or '',
+                'type': _KIND_LABELS.get(item.kind, item.kind),
+                'hash': item.entry_id,
+                'id': item.entry_id,
+                'cached_at': _format_atime(item.atime),
+                'url': item.url or '',
+            }
+            matched = True
+            for key, expected in structured:
+                needle = expected.casefold()
+                if key == 'size':
+                    matched = _size_query_matches(item.content_size, expected)
+                elif key == 'dbsize':
+                    matched = _size_query_matches(item.db_size, expected)
+                else:
+                    field_value = str(fields.get(key, '')).casefold()
+                    matched = needle in field_value
+                    if key == 'type' and not matched:
+                        matched = needle in item.kind.casefold()
+                if not matched:
+                    break
+            if not matched:
+                continue
+
             if query:
                 if not self._active_search_fields:
                     continue
-                cached_at = _format_atime(item.atime).casefold()
-                fields = {
-                    'name': _display_name(item),
-                    'creator': item.creator_name,
-                    'asset_id': item.asset_id,
-                    'type': _KIND_LABELS.get(item.kind, item.kind),
-                    'hash': item.entry_id,
-                    'cached_at': cached_at,
-                    'url': item.url,
-                }
                 searchable = ' '.join(
                     str(fields[field]) for field in self._active_search_fields if field in fields
                 ).casefold()
+                # Include local name/hash/type/URL metadata by default when the search field
+                # chooser has no usable selection.
                 if query not in searchable:
                     continue
             result.append(item)
