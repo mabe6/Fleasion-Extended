@@ -153,8 +153,8 @@ with tempfile.TemporaryDirectory() as folder:
 
 
 def test_detect_kind_recognizes_ktx1_and_ktx2_texture_headers() -> None:
-    ktx1 = b'\\xabKTX 11\\xbb\\r\\n\\x1a\\n' + bytes(64)
-    ktx2 = b'\\xabKTX 20\\xbb\\r\\n\\x1a\\n' + bytes(64)
+    ktx1 = b'\xabKTX 11\xbb\r\n\x1a\n' + bytes(64)
+    ktx2 = b'\xabKTX 20\xbb\r\n\x1a\n' + bytes(64)
     assert _detect_kind(ktx1)[0] == 'ktx'
     assert _detect_kind(ktx2)[0] == 'ktx'
 
