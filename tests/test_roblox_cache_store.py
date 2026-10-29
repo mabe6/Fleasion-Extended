@@ -9,6 +9,7 @@ import pytest
 from fleasion.database.roblox_cache_store import (
     RobloxCacheError,
     RobloxCacheStore,
+    decompress_roblox_payload,
     detect_roblox_payload_kind,
     split_rbxh_entry,
 )
@@ -420,3 +421,33 @@ def test_payload_kind_detects_ktx_with_a_short_prefix() -> None:
     assert detect_roblox_payload_kind(b'RBX-prefix:' + ktx1) == 'ktx'
     assert detect_roblox_payload_kind(b'header:' + ktx2) == 'ktx'
     assert detect_roblox_payload_kind(b'ordinary binary data') == 'other'
+
+
+def test_scan_detects_zstd_encoded_fts_payload_without_changing_cache_bytes(tmp_path, monkeypatch):
+    import zstandard
+
+    target_id = "c" * 32
+    inner_payload = b"\\x89PNG\\r\\n\\x1a\\n" + b"fixture-data-" * 24
+    compressed_payload = zstandard.ZstdCompressor().compress(inner_payload)
+    url = (
+        "https://fts.rbxcdn.com/v2/sc1/50f96a5fdc9efbfb12c8eaf2f1de071c"
+        "?encoding=zstd&version=1"
+    )
+    entry_data = _make_entry(url, compressed_payload)
+    store = _make_store(tmp_path, monkeypatch, {target_id: entry_data})
+
+    found = {item.entry_id: item for item in store.scan()}[target_id]
+
+    assert found.kind == "png"
+    assert found.asset_id == ""
+    assert decompress_roblox_payload(compressed_payload) == inner_payload
+    assert store._get_entry_data(target_id)[0] == entry_data
+
+
+def test_zstd_preview_decompression_has_a_hard_output_limit():
+    import zstandard
+
+    payload = zstandard.ZstdCompressor().compress(b"A" * 128)
+
+    with pytest.raises(RobloxCacheError, match="preview limit"):
+        decompress_roblox_payload(payload, max_output_bytes=64)
