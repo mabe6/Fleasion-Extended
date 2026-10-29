@@ -54,6 +54,7 @@ def test_local_db_opens_on_active_swaps_with_pasteable_ids_and_optional_probe(
             "Cache Slots",
         ]
         assert widget.pages.currentIndex() == 0
+        assert not widget.swaps_page.isHidden()
         assert widget.swaps_table.rowCount() == 1
         assert widget.swaps_table.item(0, 0).text() == "Active"
         assert widget.swaps_table.item(0, 1).text() == "Replace idle animation"
@@ -109,6 +110,7 @@ def test_cache_slots_view_has_preview_and_type_status_filters(monkeypatch, tmp_p
     )
     try:
         assert widget.layout().indexOf(widget.entries_page) >= 0
+        assert not widget.entries_page.isHidden()
         assert widget.layout().indexOf(widget.pages) == -1
         assert widget.preview_panel is not None
         assert widget.kind_filter_combo.findData('ktx') >= 0
