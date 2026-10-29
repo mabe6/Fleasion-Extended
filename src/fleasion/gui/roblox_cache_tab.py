@@ -39,6 +39,7 @@ from ..database.roblox_cache_store import (
     RobloxCacheError,
     RobloxCacheStore,
     default_roblox_cache_root,
+    detect_roblox_cache_payload_kind,
     detect_roblox_payload_kind,
     decompress_roblox_payload,
     split_rbxh_entry,
@@ -1239,7 +1240,7 @@ class RobloxCacheTab(QWidget):
                     'The selected target is not a recognized RBXH cache entry. '
                     'No cache bytes were changed.'
                 )
-            target_kind = detect_roblox_payload_kind(target_payload)
+            target_kind = detect_roblox_cache_payload_kind(target_payload)
 
             allow_type_mismatch = source_kind != target_kind and source_kind != 'other' and target_kind != 'other'
             if not self._confirm_type_mismatch(
@@ -1340,7 +1341,7 @@ class RobloxCacheTab(QWidget):
             url, payload, has_header = split_rbxh_entry(data)
             db_size = self.store.database_size(target_id)
             status = self.store.swap_status(target_id)
-            kind = detect_roblox_payload_kind(payload)
+            kind = detect_roblox_cache_payload_kind(payload)
             lines = [
                 f'Target cache ID: {target_id}',
                 f'Swap state: {status or "no saved swap"}',
