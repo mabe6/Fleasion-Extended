@@ -1105,7 +1105,7 @@ class DatabaseAssetExplorer(QWidget):
         else:
             self.preview_panel.hide()
 
-    def _stop_loader(self, attribute: str) -> None
+    def _stop_loader(self, attribute: str) -> None:
         worker = getattr(self, attribute, None)
         if worker is None:
             return
