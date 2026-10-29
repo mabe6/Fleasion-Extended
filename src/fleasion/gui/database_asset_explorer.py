@@ -1077,13 +1077,19 @@ class DatabaseAssetExplorer(QWidget):
             self.copy_id_button.setEnabled(False)
             self.copy_asset_button.setEnabled(False)
             self.export_button.setEnabled(False)
-            self.preview_panel.hide()
             self._reset_preview_widgets()
-            if page_items:
-                self.status_label.setText('Select an asset to preview it.')
+            if self._preview_enabled:
+                self.preview_panel.show()
+                self.preview_title.setText('Select an asset')
+                self.preview_details.setText(
+                    'Choose a row to load its preview. Search and type filters continue to work while this panel stays open.'
+                    if page_items else 'No matching assets. Change the search text or type filter.'
+                )
             else:
-                self.preview_title.setText('No matching assets')
-                self.preview_details.setText('Change the search text or type filter.')
+                self.preview_panel.hide()
+                if not page_items:
+                    self.preview_title.setText('No matching assets')
+                    self.preview_details.setText('Change the search text or type filter.')
 
         shown_start = self._page_offset + 1 if page_items else 0
         shown_end = self._page_offset + len(page_items)
