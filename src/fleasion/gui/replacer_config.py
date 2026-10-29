@@ -780,8 +780,8 @@ class ReplacerConfigWindow(QDialog):
             config_manager=self.config_manager,
         )
 
-        self.tab_widget.addTab(self._roblox_cache_tab.swaps_page, 'Local DB')
-        self.tab_widget.addTab(self._cache_slots_tab.entries_page, 'Cache Slots')
+        self.tab_widget.addTab(self._roblox_cache_tab, 'Local DB')
+        self.tab_widget.addTab(self._cache_slots_tab, 'Cache Slots')
         self.tab_widget.addTab(self._local_database_editor_tab, 'Asset Database')
 
         # Keep only miscellaneous utilities that work without HTTP interception.
@@ -815,7 +815,7 @@ class ReplacerConfigWindow(QDialog):
             tr('ui.gui.replacer_config.settings'),
         )
 
-        self.tab_widget.setCurrentWidget(self._roblox_cache_tab.swaps_page)
+        self.tab_widget.setCurrentWidget(self._roblox_cache_tab)
         main_layout.addWidget(self.tab_widget)
         self.setLayout(main_layout)
 
