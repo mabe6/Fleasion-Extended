@@ -45,7 +45,33 @@ from ..utils import log_buffer
 
 
 _MAX_PREVIEW_BYTES = 50 * 1024 * 1024
-_SIZE_QUERY_RE = re.compile(r'^(<=|>=|<|>|=)?\s*(\d+(?:\.\d+)?)\s*(b|kb|kib|mb|mib|gb|gib)? = {'png', 'jpg', 'jpeg', 'bmp', 'gif', 'webp', 'tiff', 'ico', 'dds', 'ktx', 'psd'}
+_SIZE_QUERY_RE = re.compile(
+    r'^(<=|>=|<|>|=)?\s*(\d+(?:\.\d+)?)\s*(b|kb|kib|mb|mib|gb|gib)?$',
+    re.I,
+)
+_SIZE_QUERY_MULTIPLIERS = {
+    'b': 1, 'kb': 1000, 'kib': 1024, 'mb': 1000**2, 'mib': 1024**2,
+    'gb': 1000**3, 'gib': 1024**3, '': 1,
+}
+_IMAGE_KINDS = {'png', 'jpg', 'jpeg', 'bmp', 'gif', 'webp', 'tiff', 'ico', 'dds', 'ktx', 'psd'}
+
+
+def _matches_size_query(value: int | None, expression: str) -> bool:
+    if value is None:
+        return False
+    match = _SIZE_QUERY_RE.fullmatch(expression.strip())
+    if not match:
+        return False
+    operator, amount, unit = match.groups()
+    target = int(float(amount) * _SIZE_QUERY_MULTIPLIERS[(unit or '').casefold()])
+    operator = operator or '='
+    return {
+        '>': value > target,
+        '>=': value >= target,
+        '<': value < target,
+        '<=': value <= target,
+        '=': value == target,
+    }[operator]
 
 
 def _format_size(value: int | None) -> str:
