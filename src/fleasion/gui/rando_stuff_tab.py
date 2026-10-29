@@ -1017,11 +1017,13 @@ class RandoStuffTab(QWidget):
             tr('ui.gui.rando_stuff_tab.subplace_id_optional')
         )
         self._subplace_id_input.textChanged.connect(self._on_subplace_id_changed)
-        account_details_layout.addWidget(self._subplace_id_input)
+        # Subplace launching depends on the removed HTTP interception layer; keep the
+        # internal empty field for shared launch code, but do not expose a dead option.
 
         self._job_id_input = QLineEdit()
         self._job_id_input.setPlaceholderText(tr('ui.gui.rando_stuff_tab.jobid_optional'))
-        account_details_layout.addWidget(self._job_id_input)
+        # Joining a specific game instance relied on proxy fallback interception.
+        # The normal place/private-server launch path remains available without it.
 
         am_btns = QHBoxLayout()
         self._add_acct_btn = QPushButton(tr('ui.gui.rando_stuff_tab.add_account'))
