@@ -711,7 +711,7 @@ class CacheScraper:
                     self._fetch_and_update_cache,
                     asset_id,
                     asset_type,
-                    full_url,
+                    base_url,
                     metadata,
                     body,
                     inner,
@@ -723,7 +723,7 @@ class CacheScraper:
                     asset_id,
                     asset_type,
                     inner,
-                    full_url,
+                    base_url,
                     metadata,
                     generation=generation,
                 )
