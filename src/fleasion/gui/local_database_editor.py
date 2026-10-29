@@ -31,6 +31,7 @@ from PyQt6.QtWidgets import (
 )
 
 from .database_asset_explorer import DatabaseAssetExplorer
+from ..database.roblox_cache_store import default_roblox_cache_root
 from ..database.sqlite_browser import (
     MAX_QUERY_ROWS,
     SQLiteBrowser,
@@ -249,13 +250,40 @@ class LocalDatabaseEditorWidget(QWidget):
         root.addLayout(footer)
 
     def _find_default_database(self) -> None:
-        """Open the standard Roblox cache DB if it exists; do not scan the entire drive at startup."""
-        candidate = Path(self.default_scan_root) / "rbx-storage.db"
-        if candidate.is_file():
-            self._add_database(candidate, open_now=True)
-            return
+        """Open a likely Roblox cache DB without scanning the entire drive at startup."""
+        candidates = [
+            Path(self.default_scan_root) / 'rbx-storage.db',
+            default_roblox_cache_root() / 'rbx-storage.db',
+        ]
+        local_app_data = os.environ.get('LOCALAPPDATA')
+        if local_app_data:
+            candidates.append(Path(local_app_data) / 'Roblox' / 'rbx-storage.db')
+
+        # Sober may have either appData/rbx-storage.db or a sibling database.
+        sober_root = (
+            Path.home() / '.var' / 'app' / 'org.vinegarhq.Sober'
+            / 'data' / 'sober'
+        )
+        candidates.extend((
+            sober_root / 'appData' / 'rbx-storage.db',
+            sober_root / 'rbx-storage.db',
+        ))
+        seen: set[Path] = set()
+        for candidate in candidates:
+            try:
+                candidate = candidate.expanduser().resolve()
+            except OSError:
+                candidate = candidate.expanduser()
+            if candidate in seen:
+                continue
+            seen.add(candidate)
+            if candidate.is_file():
+                self._add_database(candidate, open_now=True)
+                return
+
         self.status_label.setText(
-            "Choose a database or scan a folder. Databases open read-only by default."
+            'No Roblox rbx-storage.db was found in the usual locations. '
+            'Choose Open Database or Scan Folder to select a cache manually.'
         )
 
     def _browse_database(self) -> None:
