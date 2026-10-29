@@ -338,7 +338,11 @@ def test_animation_import_writes_converted_payload_and_reports_conversion(
     from types import SimpleNamespace
 
     target_id = 'a' * 32
-    target_payload = b'<roblox version="4"><Item class="KeyframeSequence"/></roblox>'
+    target_payload = (
+        b'<roblox version="4"><Item class="KeyframeSequence"><Properties>'
+        b'<string name="Name">' + b'T' * 300 + b'</string>'
+        b'</Properties></Item></roblox>'
+    )
     converted_payload = (
         b'<roblox version="4"><Item class="KeyframeSequence">'
         b'<string name="Converted">true</string></Item></roblox>'
@@ -377,7 +381,11 @@ def test_animation_import_falls_back_to_original_when_conversion_fails(
     from fleasion.database.animation_convert import AnimationConversionError
 
     target_id = 'a' * 32
-    target_payload = b'<roblox version="4"><Item class="KeyframeSequence"/></roblox>'
+    target_payload = (
+        b'<roblox version="4"><Item class="KeyframeSequence"><Properties>'
+        b'<string name="Name">' + b'T' * 300 + b'</string>'
+        b'</Properties></Item></roblox>'
+    )
     original = _make_entry('https://example.test/?id=111', target_payload)
     source_payload = b'<roblox version="4"><Item class="CurveAnimation"/></roblox>'
     entries = {
