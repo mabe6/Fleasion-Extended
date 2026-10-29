@@ -483,7 +483,7 @@ class RobloxCacheStore:
                 file_size=len(data),
                 database_size=database_size,
                 modified_at=modified_at,
-                kind=detect_roblox_payload_kind(decoded_prefix),
+                kind=detect_roblox_cache_payload_kind(payload),
                 url=url,
                 asset_id=_asset_id_from_url(url),
                 has_rbxh_header=has_header,
@@ -963,7 +963,7 @@ class RobloxCacheStore:
             else target_data
         )
         _target_url, target_payload, _has_target_header = split_rbxh_entry(template)
-        target_kind = detect_roblox_payload_kind(target_payload)
+        target_kind = detect_roblox_cache_payload_kind(target_payload)
         conversion_notes: tuple[str, ...] = ()
         conversion_warning = ''
         written_animation_report = animation_report
@@ -1128,7 +1128,7 @@ class RobloxCacheStore:
             f'Database size: {db_size}',
             f'RBXH header: {"yes" if has_header else "NO"}',
             f'URL: {url}',
-            f'Detected kind: {detect_roblox_payload_kind(payload)}',
+            f'Detected kind: {detect_roblox_cache_payload_kind(payload)}',
             f'First 96 bytes: {data[:96].hex(" ")}',
             f'Modified: {modified_text}',
         ]
