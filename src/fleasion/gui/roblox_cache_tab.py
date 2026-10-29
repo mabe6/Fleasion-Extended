@@ -872,7 +872,7 @@ class RobloxCacheTab(QWidget):
                     lines.append(f'{offset:08x}  {hex_part:<47}  |{ascii_part}|')
                 if len(payload) > len(sample):
                     lines.append(f'… {len(payload) - len(sample):,} byte(s) omitted')
-                self.preview_text.setPlainText('\\n'.join(lines))
+                self.preview_text.setPlainText('\n'.join(lines))
                 self.preview_stack.setCurrentWidget(self.preview_text)
         except Exception as exc:
             self.preview_info.setText(f'Preview failed: {type(exc).__name__}: {exc}')
