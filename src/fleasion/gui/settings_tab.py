@@ -1019,7 +1019,14 @@ class SettingsTab(QWidget):
         self._sync_manual_proxy_credentials_timer()
 
     def _selected_manual_proxy_has_credentials(self) -> bool:
-        mode = self._upstream_mode_combo.currentData()
+        # Proxy transport controls are intentionally not built in the local-cache
+        # focused UI. Treat the missing selector as "no manual proxy selected",
+        # rather than crashing during SettingsTab startup.
+        mode_combo = getattr(self, '_upstream_mode_combo', None)
+        if mode_combo is None:
+            return True
+
+        mode = mode_combo.currentData()
         if mode == 'http_connect':
             return bool(self._http_proxy_user.text().strip() or self._http_proxy_pass.text())
         if mode == 'socks5':

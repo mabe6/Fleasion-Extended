@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import os
+from types import SimpleNamespace
 
 from PyQt6.QtWidgets import QApplication, QTabWidget, QWidget
+
+from fleasion.gui.settings_tab import SettingsTab
 
 import fleasion.gui.replacer_config as replacer_config
 
@@ -39,3 +42,27 @@ def test_http_proxy_dependent_tabs_are_hidden_until_support_is_available(monkeyp
 
     tabs.close()
     del app
+
+
+
+def test_manual_proxy_credential_timer_is_safe_when_proxy_controls_are_hidden() -> None:
+    class FakeTimer:
+        def __init__(self):
+            self.stopped = 0
+            self.started = 0
+
+        def stop(self):
+            self.stopped += 1
+
+        def start(self):
+            self.started += 1
+
+    timer = FakeTimer()
+    state = SimpleNamespace(_manual_proxy_credentials_timer=timer)
+
+    # SettingsTab does not build the proxy transport widgets in this build.
+    assert SettingsTab._selected_manual_proxy_has_credentials(SimpleNamespace()) is True
+    SettingsTab._sync_manual_proxy_credentials_timer(state)
+
+    assert timer.stopped == 1
+    assert timer.started == 0
