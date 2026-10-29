@@ -443,6 +443,9 @@ class RobloxCacheTab(QWidget):
             self.pages.hide()
             selected_page.setParent(self)
             root.insertWidget(0, selected_page, 1)
+            # QWidget.setParent() hides a widget. The promoted dashboard page must
+            # explicitly be shown, otherwise only the detached status label is visible.
+            selected_page.setVisible(True)
             if self._view_mode == 'slots':
                 # Share the scan/operation status row with the standalone Cache Slots view.
                 self.status_label.setParent(self)
