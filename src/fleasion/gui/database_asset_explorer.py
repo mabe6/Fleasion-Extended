@@ -42,7 +42,11 @@ from PyQt6.QtWidgets import (
     QWidgetAction,
 )
 
-from ..database.roblox_cache_store import detect_roblox_payload_kind, split_rbxh_entry
+from ..database.roblox_cache_store import (
+    decompress_roblox_payload,
+    detect_roblox_payload_kind,
+    split_rbxh_entry,
+)
 from ..database.sqlite_browser import SQLiteBrowser, SQLiteBrowserError, quote_identifier
 from ..utils.roblox_auth import get_roblosecurity as _get_roblosecurity
 
@@ -1245,7 +1249,11 @@ class DatabaseAssetExplorer(QWidget):
                 return
             data = self._read_entry_bytes(item.entry_id)
             _url, payload, _has_header = split_rbxh_entry(data)
+            # Keep the raw cached bytes for Export; only decode a copy for previewing.
             self._current_payload = payload
+            payload = decompress_roblox_payload(
+                payload, max_output_bytes=_MAX_PREVIEW_BYTES
+            )
 
             if item.kind in _IMAGE_KINDS:
                 from ..cache.cache_viewer import ImageLoaderThread
@@ -1334,10 +1342,23 @@ class DatabaseAssetExplorer(QWidget):
                 self.text_preview.setPlainText(self._format_text_payload(payload))
                 self.preview_stack.setCurrentWidget(self.text_preview)
             else:
-                self._show_info(
-                    f'{_KIND_LABELS.get(item.kind, item.kind)} detected, but this payload has no '
-                    'built-in preview. Use Export payload to inspect the raw bytes.'
-                )
+                sample = payload[:4096]
+                lines = [
+                    f'Unrecognized payload · {len(payload):,} bytes',
+                    f'Showing the first {len(sample):,} byte(s) as hexadecimal and ASCII.',
+                    '',
+                ]
+                for offset in range(0, len(sample), 16):
+                    block = sample[offset:offset + 16]
+                    hex_part = ' '.join(f'{byte:02x}' for byte in block)
+                    ascii_part = ''.join(
+                        chr(byte) if 32 <= byte < 127 else '.' for byte in block
+                    )
+                    lines.append(f'{offset:08x}  {hex_part:<47}  |{ascii_part}|')
+                if len(payload) > len(sample):
+                    lines.append(f'… {len(payload) - len(sample):,} byte(s) omitted')
+                self.text_preview.setPlainText('\\n'.join(lines))
+                self.preview_stack.setCurrentWidget(self.text_preview)
         except Exception as exc:
             self._show_info(f'Preview failed: {type(exc).__name__}: {exc}')
 
