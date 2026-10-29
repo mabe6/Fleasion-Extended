@@ -162,6 +162,13 @@ class RobloxCacheTab(QWidget):
         self.swaps_table.setColumnWidth(4, 145)
         self.swaps_table.itemDoubleClicked.connect(self._load_selected_swap)
         active_layout.addWidget(self.swaps_table, 1)
+        self.swap_empty_label = QLabel(
+            'No saved swaps yet. Use Cache Slots to browse every local entry, then choose a target and replacement ID.'
+        )
+        self.swap_empty_label.setWordWrap(True)
+        self.swap_empty_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.swap_empty_label.setStyleSheet('color: palette(placeholder-text); padding: 12px;')
+        active_layout.addWidget(self.swap_empty_label)
         swaps_layout.addWidget(active_group, 1)
 
         edit_group = QWidget()
@@ -929,6 +936,14 @@ class RobloxCacheTab(QWidget):
                 self.swaps_table.setItem(row, column, item)
         self.swaps_table.setUpdatesEnabled(True)
         self.swaps_table.resizeRowsToContents()
+        self.swap_empty_label.setVisible(not visible_records)
+        if not visible_records:
+            if records:
+                self.swap_empty_label.setText('No swaps match the selected filters. Clear Search or choose All swaps.')
+            else:
+                self.swap_empty_label.setText(
+                    'No saved swaps yet. Use Cache Slots to browse every local entry, then choose a target and replacement ID.'
+                )
 
     def refresh(self) -> None:
         root = self.root_edit.text().strip().strip('"')
