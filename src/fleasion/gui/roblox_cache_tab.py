@@ -242,7 +242,7 @@ class RobloxCacheTab(QWidget):
         search_row = QHBoxLayout()
         search_row.addWidget(QLabel('Search:'))
         self.search_edit = QLineEdit()
-        self.search_edit.setPlaceholderText('Cache ID, asset ID, type, swap status or URL…')
+        self.search_edit.setPlaceholderText('Name, asset ID, URL, or filters: type:ktx size:>1mb status:swapped')
         self.search_edit.setClearButtonEnabled(True)
         self.search_edit.textChanged.connect(self._render_entries)
         search_row.addWidget(self.search_edit, 2)
@@ -279,10 +279,11 @@ class RobloxCacheTab(QWidget):
         search_row.addWidget(self.entries_count_label)
         entries_layout.addLayout(search_row)
 
-        self.table = QTableWidget(0, 9)
+        self.table = QTableWidget(0, 10)
         self.table.setHorizontalHeaderLabels(
-            ['Entry ID', 'Asset ID', 'Kind', 'File/content size', 'DB size', 'Modified', 'Swap status', 'Storage', 'URL']
+            ['Entry ID', 'Asset ID', 'Kind', 'File/content size', 'DB size', 'Modified', 'Swap status', 'Storage', 'URL', 'Name']
         )
+        self.table.horizontalHeader().moveSection(9, 1)
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
@@ -579,6 +580,7 @@ class RobloxCacheTab(QWidget):
                 entry.swap_status or '—',
                 entry.storage_mode,
                 entry.url,
+                self._entry_name(entry),
             ]
             for column, value in enumerate(values):
                 item = QTableWidgetItem(str(value))
@@ -591,6 +593,7 @@ class RobloxCacheTab(QWidget):
         self.table.resizeColumnsToContents()
         self.table.setColumnWidth(0, 270)
         self.table.setColumnWidth(8, 400)
+        self.table.setColumnWidth(9, 220)
         self.entries_count_label.setText(
             f'{len(visible_entries):,} / {len(self.entries):,} entries'
             if len(visible_entries) != len(self.entries) else f'{len(self.entries):,} entries'
@@ -605,10 +608,12 @@ class RobloxCacheTab(QWidget):
         if entry is None:
             self._reset_slot_preview()
             return
-        self.preview_title.setText(f'{entry.kind.upper()} · {entry.entry_id[:12]}')
+        display_name = self._entry_name(entry)
+        self.preview_title.setText(display_name or f'{entry.kind.upper()} · {entry.entry_id[:12]}')
         details = [
             f'Asset ID: {entry.asset_id or "not found"}',
             f'Type: {entry.kind}',
+            f'Name: {display_name or "not stored in local metadata"}',
             f'File/content size: {_format_size(entry.file_size)}',
             f'Database size: {_format_size(entry.database_size)}',
             f'Swap status: {entry.swap_status or "unmodified"}',
