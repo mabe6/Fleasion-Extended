@@ -86,8 +86,8 @@ def _keyframe_sequence_xml(body_part: str = 'LowerTorso', marker: str = '') -> b
       </Item>
     </Item>
   </Item>
-</roblox>
 {marker}
+</roblox>
 '''.encode('utf-8')
 
 

@@ -369,3 +369,35 @@ def test_animation_import_writes_converted_payload_and_reports_conversion(
     assert stored_payload == converted_payload
     assert 'Animation conversion: Converted CurveAnimation to KeyframeSequence' in message
     assert 'Read-back verification: OK' in message
+
+
+def test_animation_import_falls_back_to_original_when_conversion_fails(
+    tmp_path, monkeypatch
+):
+    from fleasion.database.animation_convert import AnimationConversionError
+
+    target_id = 'a' * 32
+    target_payload = b'<roblox version="4"><Item class="KeyframeSequence"/></roblox>'
+    original = _make_entry('https://example.test/?id=111', target_payload)
+    source_payload = b'<roblox version="4"><Item class="CurveAnimation"/></roblox>'
+    entries = {
+        target_id: original,
+        'b' * 32: _make_entry('https://example.test/?id=222', b'B' * 350),
+        'c' * 32: _make_entry('https://example.test/?id=333', b'C' * 360),
+    }
+    store = _make_store(tmp_path, monkeypatch, entries)
+    import_path = tmp_path / 'curve-animation.rbxmx'
+    import_path.write_bytes(source_payload)
+
+    def fail_conversion(_payload: bytes, _target_payload: bytes):
+        raise AnimationConversionError('test conversion failure')
+
+    monkeypatch.setattr(store_module, 'convert_animation_for_slot', fail_conversion)
+
+    message = store.import_file(target_id, import_path, allow_type_mismatch=True)
+
+    _url, stored_payload, has_header = split_rbxh_entry(store._entry_path(target_id).read_bytes())
+    assert has_header is True
+    assert stored_payload == source_payload
+    assert 'Animation conversion warning (original payload imported unchanged)' in message
+    assert 'test conversion failure' in message
