@@ -1357,7 +1357,7 @@ class DatabaseAssetExplorer(QWidget):
                     lines.append(f'{offset:08x}  {hex_part:<47}  |{ascii_part}|')
                 if len(payload) > len(sample):
                     lines.append(f'… {len(payload) - len(sample):,} byte(s) omitted')
-                self.text_preview.setPlainText('\\n'.join(lines))
+                self.text_preview.setPlainText('\n'.join(lines))
                 self.preview_stack.setCurrentWidget(self.text_preview)
         except Exception as exc:
             self._show_info(f'Preview failed: {type(exc).__name__}: {exc}')
