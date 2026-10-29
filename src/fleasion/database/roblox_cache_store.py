@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import contextlib
+import gzip
 import hashlib
 import html
+import io
 import json
 import os
 import re
@@ -27,10 +29,76 @@ RBXH_META_SIZE = 25
 ENTRY_HEAD_READ = 8192
 MAX_IMPORT_BYTES = 100_000_000
 MAX_ENTRY_READ_BYTES = 500_000_000
+_ZSTD_MAGIC = b'\\x28\\xb5\\x2f\\xfd'
+_GZIP_MAGIC = b'\\x1f\\x8b'
+_DEFAULT_PREVIEW_DECOMPRESSED_BYTES = 50 * 1024 * 1024
 
 
 class RobloxCacheError(Exception):
     """A cache operation failed for a reason suitable for display in the GUI."""
+
+
+def decompress_roblox_payload_prefix(
+    payload: bytes,
+    *,
+    max_output_bytes: int = ENTRY_HEAD_READ,
+) -> bytes:
+    """Return a bounded prefix after decoding a gzip/Zstandard cache wrapper, if present."""
+    if max_output_bytes <= 0:
+        return b''
+    if payload.startswith(_GZIP_MAGIC):
+        try:
+            return zlib.decompressobj(16 + zlib.MAX_WBITS).decompress(
+                payload, max_output_bytes
+            )
+        except zlib.error:
+            return payload
+    if payload.startswith(_ZSTD_MAGIC):
+        try:
+            import zstandard
+
+            with zstandard.ZstdDecompressor().stream_reader(io.BytesIO(payload)) as reader:
+                return reader.read(max_output_bytes)
+        except Exception:
+            # Cache scans should remain usable when a frame is truncated or malformed.
+            return payload
+    return payload
+
+
+def decompress_roblox_payload(
+    payload: bytes,
+    *,
+    max_output_bytes: int = _DEFAULT_PREVIEW_DECOMPRESSED_BYTES,
+) -> bytes:
+    """Decode a compressed cache payload with a hard output limit for safe previews."""
+    if max_output_bytes < 0:
+        raise ValueError('max_output_bytes must be non-negative')
+    if not payload.startswith((_GZIP_MAGIC, _ZSTD_MAGIC)):
+        return payload
+
+    encoding = 'gzip' if payload.startswith(_GZIP_MAGIC) else 'Zstandard'
+    try:
+        if encoding == 'gzip':
+            with gzip.GzipFile(fileobj=io.BytesIO(payload), mode='rb') as reader:
+                decoded = reader.read(max_output_bytes + 1)
+        else:
+            import zstandard
+
+            with zstandard.ZstdDecompressor().stream_reader(io.BytesIO(payload)) as reader:
+                decoded = reader.read(max_output_bytes + 1)
+    except Exception as exc:
+        raise RobloxCacheError(f'Could not decompress {encoding} payload: {exc}') from exc
+
+    if len(decoded) > max_output_bytes:
+        raise RobloxCacheError(
+            f'Decompressed payload exceeds the {max_output_bytes:,}-byte preview limit.'
+        )
+    return decoded
+
+
+def detect_roblox_cache_payload_kind(payload: bytes) -> str:
+    """Detect a cached payload's inner format while keeping its stored bytes unchanged."""
+    return detect_roblox_payload_kind(decompress_roblox_payload_prefix(payload))
 
 
 @dataclass(frozen=True)
@@ -409,18 +477,19 @@ class RobloxCacheStore:
                     status = 'swapped' if hashlib.sha256(data).hexdigest() == expected_hash else 'reverted'
                 else:
                     status = 'swapped' if len(data) == swap_record.get('swapped_size') else 'reverted'
+            decoded_prefix = decompress_roblox_payload_prefix(payload)
             results.append(RobloxCacheEntry(
                 entry_id=entry_id,
                 file_size=len(data),
                 database_size=database_size,
                 modified_at=modified_at,
-                kind=detect_roblox_payload_kind(payload),
+                kind=detect_roblox_payload_kind(decoded_prefix),
                 url=url,
                 asset_id=_asset_id_from_url(url),
                 has_rbxh_header=has_header,
                 swap_status=status,
                 storage_mode=storage_mode,
-                name=_embedded_name(payload),
+                name=_embedded_name(decoded_prefix),
             ))
 
         for entry_id, record in self._iter_database_records():
