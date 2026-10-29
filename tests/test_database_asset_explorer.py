@@ -70,7 +70,7 @@ def test_ktx2_bc7_uses_extended_decoder(monkeypatch) -> None:
 
     png = convert(ktx)
     assert png is not None
-    assert png.startswith(b'\\x89PNG\\r\\n\\x1a\\n')
+    assert png.startswith(b'\x89PNG\r\n\x1a\n')
 
 
 def test_asset_url_extraction_and_type_groups() -> None:
