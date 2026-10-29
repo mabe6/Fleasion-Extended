@@ -483,7 +483,7 @@ class RobloxCacheStore:
                 file_size=len(data),
                 database_size=database_size,
                 modified_at=modified_at,
-                kind=detect_roblox_cache_payload_kind(payload),
+                kind=detect_roblox_payload_kind(decoded_prefix),
                 url=url,
                 asset_id=_asset_id_from_url(url),
                 has_rbxh_header=has_header,
