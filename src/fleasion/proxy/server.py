@@ -66,7 +66,15 @@ PROFILE_API_PATH_FRAGMENT = '/v1/user/profiles/get-profiles'
 CLIENT_SETTINGS_HOSTS: frozenset = frozenset(
     {'clientsettingscdn.roblox.com', 'clientsettings.roblox.com'}
 )
-CDN_HOSTS: frozenset = frozenset({'fts.rbxcdn.com', 'contentdelivery.roblox.com'})
+CDN_HOSTS = frozenset({
+    'fts.rbxcdn.com',
+    'contentdelivery.roblox.com',
+    'tr.rbxcdn.com',
+    'images.rbxcdn.com',
+    'static.rbxcdn.com',
+    *(f't{i}.rbxcdn.com' for i in range(8)),
+    *(f'sc{i}.rbxcdn.com' for i in range(8)),
+})
 BASE_INTERCEPT_HOSTS: frozenset = frozenset({ASSET_DELIVERY_HOST, GAMEJOIN_HOST, *CDN_HOSTS})
 USERNAME_SPOOFER_INTERCEPT_HOSTS: frozenset = frozenset({PROFILE_API_HOST})
 CUSTOM_FFLAGS_INTERCEPT_HOSTS: frozenset = CLIENT_SETTINGS_HOSTS
@@ -2846,16 +2854,15 @@ class FleasionProxy:
                         resp_location = resp_headers.get(b'location', b'').decode(
                             'ascii', errors='replace'
                         )
-                        if resp_body_plain_nb:
-                            self.cache_scraper.process_direct_asset_response(
-                                path,
-                                resp_status_code,
-                                resp_location,
-                                resp_body_plain_nb,
-                                resp_headers.get(b'content-type', b'').decode(
-                                    'ascii', errors='replace'
-                                ),
-                            )
+                        self.cache_scraper.process_direct_asset_response(
+                            path,
+                            resp_status_code,
+                            resp_location,
+                            resp_body_plain_nb,
+                            resp_headers.get(b'content-type', b'').decode(
+                                'ascii', errors='replace'
+                            ),
+                        )
 
                 elif host in CDN_HOSTS:
                     full_url = f'https://{host}{path}'

@@ -9,6 +9,7 @@ import json
 import re
 import sqlite3
 import tempfile
+import zlib
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -134,10 +135,35 @@ _SEARCH_FIELD_LABELS = (
 _DEFAULT_SEARCH_FIELDS = {'name', 'asset_id', 'type', 'hash', 'url'}
 
 
+def _decompress_detection_prefix(payload: bytes) -> bytes:
+    """Decode a compressed prefix without requiring the whole cache file.
+
+    The explorer intentionally samples large entries for speed; gzip.decompress()
+    rejects a truncated sample, while a streaming decompressor can still reveal
+    the inner mesh, texture, or Roblox model signature.
+    """
+    if not payload:
+        return payload
+    if payload.startswith(b'\x1f\x8b'):
+        try:
+            return zlib.decompressobj(16 + zlib.MAX_WBITS).decompress(payload)
+        except zlib.error:
+            return payload
+    if payload.startswith(b'\x28\xb5\x2f\xfd'):
+        try:
+            import zstandard
+
+            return zstandard.ZstdDecompressor().decompressobj().decompress(payload)
+        except Exception:
+            return payload
+    return payload
+
+
 def _detect_kind(sample: bytes) -> tuple[str, str]:
     url, payload, has_header = split_rbxh_entry(sample)
     if not has_header:
         payload = sample
+    payload = _decompress_detection_prefix(payload)
     kind = detect_roblox_payload_kind(payload)
     # Some XML assets contain animations but have no binary RBXM signature.
     if kind == 'xml' and b'CurveAnimation' in payload:

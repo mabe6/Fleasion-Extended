@@ -26,6 +26,20 @@ def test_asset_kind_recognizes_readable_animation_and_image_formats() -> None:
     assert url == ''
 
 
+def test_detect_kind_decompresses_truncated_gzip_prefix() -> None:
+    import gzip
+    import hashlib
+
+    payload = b'version 1.00\n' + b''.join(
+        hashlib.sha256(str(index).encode()).digest() for index in range(3000)
+    )
+    compressed = gzip.compress(payload)
+    assert len(compressed) > 8192
+    kind, url = _detect_kind(compressed[:8192])
+    assert kind == 'mesh'
+    assert url == ''
+
+
 def test_embedded_roblox_xml_name_is_readable() -> None:
     payload = (
         b'<roblox version="4"><Item class="KeyframeSequence"><Properties>'
