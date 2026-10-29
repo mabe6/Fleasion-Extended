@@ -145,16 +145,16 @@ def _ktx1_extended_decoder(internal_fmt: int) -> tuple[str, tuple[int, ...]] | N
         0x8E8F: ('decode_bc6', ()),
     }
     astc_blocks = (
-        (0x93B0, 4, 4), (0x93B2, 5, 4), (0x93B4, 5, 5),
-        (0x93B6, 6, 5), (0x93B8, 6, 6), (0x93BA, 8, 5),
-        (0x93BC, 8, 6), (0x93BE, 8, 8), (0x93C0, 10, 5),
-        (0x93C2, 10, 6), (0x93C4, 10, 8), (0x93C6, 10, 10),
-        (0x93C8, 12, 10), (0x93CA, 12, 12),
+        (0x93B0, 4, 4), (0x93B1, 5, 4), (0x93B2, 5, 5),
+        (0x93B3, 6, 5), (0x93B4, 6, 6), (0x93B5, 8, 5),
+        (0x93B6, 8, 6), (0x93B7, 8, 8), (0x93B8, 10, 5),
+        (0x93B9, 10, 6), (0x93BA, 10, 8), (0x93BB, 10, 10),
+        (0x93BC, 12, 10), (0x93BD, 12, 12),
     )
     if internal_fmt in formats:
         return formats[internal_fmt]
     for base, block_width, block_height in astc_blocks:
-        if internal_fmt in (base, base + 1):
+        if internal_fmt in (base, base + 0x20):
             return 'decode_astc', (block_width, block_height)
     return None
 
