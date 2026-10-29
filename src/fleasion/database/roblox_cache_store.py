@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import contextlib
 import hashlib
+import html
 import json
 import os
 import re
 import sqlite3
 import struct
 import time
+import zlib
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -45,6 +47,29 @@ class RobloxCacheEntry:
     has_rbxh_header: bool
     swap_status: str = ''
     storage_mode: str = 'file'
+    name: str = ''
+
+
+def _embedded_name(payload: bytes) -> str:
+    """Read a textual Roblox Name property when it is present in the payload prefix."""
+    if not payload:
+        return ''
+    data = payload
+    if data.startswith(b'\x1f\x8b'):
+        try:
+            data = zlib.decompressobj(16 + zlib.MAX_WBITS).decompress(data)
+        except zlib.error:
+            pass
+    text = data.decode('utf-8', errors='ignore')
+    match = re.search(
+        r'<(?:string|Content)\s+name=["\']Name["\']\s*>(.*?)</(?:string|Content)>',
+        text,
+        re.IGNORECASE | re.DOTALL,
+    )
+    if match is None:
+        return ''
+    value = html.unescape(match.group(1)).strip()
+    return value[:160] if value else ''
 
 
 def default_roblox_cache_root() -> Path:
@@ -65,10 +90,14 @@ def default_roblox_cache_root() -> Path:
     )
     # Sober commonly keeps its Roblox database under appData while assets use sibling folders.
     sober_appdata = sober_data / 'appData'
-    if (sober_appdata / 'rbx-storage.db').is_file() or sober_appdata.is_dir():
+    # Check the database itself first. An empty appData directory must not hide a DB
+    # that lives one directory above it.
+    if (sober_appdata / 'rbx-storage.db').is_file():
         return sober_appdata
     if (sober_data / 'rbx-storage.db').is_file():
         return sober_data
+    if sober_appdata.is_dir():
+        return sober_appdata
     return Path.home() / 'Roblox'
 
 
@@ -391,6 +420,7 @@ class RobloxCacheStore:
                 has_rbxh_header=has_header,
                 swap_status=status,
                 storage_mode=storage_mode,
+                name=_embedded_name(payload),
             ))
 
         for entry_id, record in self._iter_database_records():
