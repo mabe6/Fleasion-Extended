@@ -446,8 +446,32 @@ class RobloxCacheTab(QWidget):
         if entry_id:
             self.source_edit.setText(entry_id)
 
+    def _entry_name(self, entry: RobloxCacheEntry) -> str:
+        if entry.name:
+            return entry.name
+        settings = getattr(self.config_manager, 'settings', {})
+        cached_names = settings.get('local_db_asset_names', {}) if isinstance(settings, dict) else {}
+        if isinstance(cached_names, dict):
+            cached = cached_names.get(entry.asset_id, {})
+            if isinstance(cached, dict) and cached.get('name'):
+                return str(cached['name'])
+        return ''
+
     def _visible_entries(self) -> list[RobloxCacheEntry]:
-        query = self.search_edit.text().strip().casefold()
+        raw_query = self.search_edit.text().strip()
+        query = raw_query.casefold()
+        structured: list[tuple[str, str]] = []
+        token_re = re.compile(r'(?P<key>[A-Za-z]+):(?P<value>"[^"]+"|\S+)')
+        supported_keys = {'name', 'type', 'size', 'dbsize', 'id', 'asset', 'url', 'status', 'storage'}
+        for match in token_re.finditer(raw_query):
+            key = match.group('key').casefold()
+            if key not in supported_keys:
+                continue
+            value = match.group('value').strip('"')
+            structured.append((key, value))
+            query = query.replace(match.group(0).casefold(), ' ', 1)
+        query = ' '.join(query.split())
+
         kind_filter = self.kind_filter_combo.currentData()
         status_filter = self.slot_status_filter.currentData()
         image_kinds = _IMAGE_KINDS
@@ -457,17 +481,55 @@ class RobloxCacheTab(QWidget):
 
         visible: list[RobloxCacheEntry] = []
         for entry in self.entries:
+            entry_name = self._entry_name(entry)
             if query and not any(
-                query in value.casefold()
+                query in str(value).casefold()
                 for value in (
+                    entry_name,
                     entry.entry_id,
                     entry.asset_id,
                     entry.kind,
                     entry.url,
-                    entry.swap_status,
+                    entry.swap_status or 'unmodified',
                     entry.storage_mode,
+                    _format_size(entry.file_size),
+                    _format_size(entry.database_size),
                 )
             ):
+                continue
+
+            matches = True
+            for key, expected in structured:
+                value = expected.casefold()
+                if key == 'name':
+                    matches = value in entry_name.casefold()
+                elif key == 'type':
+                    aliases = {
+                        'images': image_kinds,
+                        'image': image_kinds,
+                        'textures': image_kinds,
+                        'models': model_kinds,
+                        'animations': animation_kinds,
+                        'audio': audio_kinds,
+                    }
+                    matches = entry.kind in aliases.get(value, {value}) or value in entry.kind.casefold()
+                elif key == 'size':
+                    matches = _matches_size_query(entry.file_size, expected)
+                elif key == 'dbsize':
+                    matches = _matches_size_query(entry.database_size, expected)
+                elif key == 'id':
+                    matches = value in entry.entry_id.casefold()
+                elif key == 'asset':
+                    matches = value in entry.asset_id.casefold()
+                elif key == 'url':
+                    matches = value in entry.url.casefold()
+                elif key == 'status':
+                    matches = value in (entry.swap_status or 'unmodified').casefold()
+                elif key == 'storage':
+                    matches = value in entry.storage_mode.casefold()
+                if not matches:
+                    break
+            if not matches:
                 continue
 
             if kind_filter == 'images' and entry.kind not in image_kinds:
