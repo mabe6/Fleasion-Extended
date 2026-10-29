@@ -14,6 +14,7 @@ on:
       - "src/fleasion/gui/replacer_config.py"
       - "tests/test_local_cache_ui.py"
       - "tests/test_animation_payload.py"
+      - "tests/test_animation_convert.py"
       - "tests/test_proxy_tab_visibility.py"
       - "src/fleasion/tray.py"
       - "src/fleasion/app.py"
@@ -81,6 +82,7 @@ jobs:
           src/fleasion/database/sqlite_browser.py
           src/fleasion/database/roblox_cache_store.py
           src/fleasion/database/animation_payload.py
+          src/fleasion/database/animation_convert.py
           src/fleasion/local_database_mode.py
           src/fleasion/gui/local_database_editor.py
           src/fleasion/gui/database_asset_explorer.py
@@ -88,7 +90,8 @@ jobs:
           src/fleasion/gui/settings_tab.py
           src/fleasion/gui/replacer_config.py
           tests/test_local_cache_ui.py
-          tests/test_animation_payload.py
+          tests/test_animation_payload.py tests/test_animation_convert.py
+          tests/test_animation_convert.py
           tests/test_proxy_tab_visibility.py
           src/fleasion/tray.py
           src/fleasion/app.py
