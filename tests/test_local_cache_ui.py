@@ -118,7 +118,7 @@ def test_cache_slots_view_has_preview_and_type_status_filters(monkeypatch, tmp_p
             RobloxCacheEntry(
                 entry_id='a' * 32, file_size=1024, database_size=1024, modified_at=1,
                 kind='ktx', url='https://assets.invalid/?id=123', asset_id='123',
-                has_rbxh_header=False, swap_status='swapped', storage_mode='database',
+                has_rbxh_header=False, swap_status='swapped', storage_mode='database', name='Classic Sword',
             ),
             RobloxCacheEntry(
                 entry_id='b' * 32, file_size=128, database_size=128, modified_at=2,
@@ -138,6 +138,14 @@ def test_cache_slots_view_has_preview_and_type_status_filters(monkeypatch, tmp_p
         widget.slot_status_filter.setCurrentIndex(
             widget.slot_status_filter.findData('swapped')
         )
+        assert widget.table.rowCount() == 1
+        assert widget.table.item(0, 0).text() == 'a' * 32
+
+        widget.search_edit.setText('type:ktx size:>500b')
+        assert widget.table.rowCount() == 1
+        assert widget.table.item(0, 0).text() == 'a' * 32
+
+        widget.search_edit.setText('name:"Classic Sword"')
         assert widget.table.rowCount() == 1
         assert widget.table.item(0, 0).text() == 'a' * 32
     finally:
