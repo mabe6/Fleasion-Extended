@@ -106,7 +106,13 @@ def detect_roblox_payload_kind(payload: bytes) -> str:
         return 'png'
     if payload.startswith(b'\xff\xd8\xff'):
         return 'jpg'
-    if payload[:12] in (b'\xabKTX 11\xbb\r\n\x1a\n', b'\xabKTX 20\xbb\r\n\x1a\n'):
+    # Some Roblox cache payloads add a short wrapper/prefix before the KTX header.
+    # Detect only near the start so arbitrary binary data cannot be misclassified.
+    ktx1 = b'\xabKTX 11\xbb\r\n\x1a\n'
+    ktx2 = b'\xabKTX 20\xbb\r\n\x1a\n'
+    if payload[:12] in (ktx1, ktx2) or any(
+        payload.find(magic, 1, 64) >= 0 for magic in (ktx1, ktx2)
+    ):
         return 'ktx'
     if payload.startswith(b'BM'):
         return 'bmp'
