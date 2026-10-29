@@ -80,6 +80,7 @@ class RobloxCacheTab(QWidget):
         self.store = RobloxCacheStore()
         self.entries: list[RobloxCacheEntry] = []
         self.entries_by_id: dict[str, RobloxCacheEntry] = {}
+        self._entries_page_offset = 0
         self._image_loader = None
         self._mesh_loader = None
         self._current_preview_image: QImage | None = None
@@ -244,7 +245,7 @@ class RobloxCacheTab(QWidget):
         self.search_edit = QLineEdit()
         self.search_edit.setPlaceholderText('Name, asset ID, URL, or filters: type:ktx size:>1mb status:swapped')
         self.search_edit.setClearButtonEnabled(True)
-        self.search_edit.textChanged.connect(self._render_entries)
+        self.search_edit.textChanged.connect(self._entry_filters_changed)
         search_row.addWidget(self.search_edit, 2)
 
         self.kind_filter_combo = QComboBox()
@@ -261,7 +262,7 @@ class RobloxCacheTab(QWidget):
             ('Other', 'other'),
         ):
             self.kind_filter_combo.addItem(label, value)
-        self.kind_filter_combo.currentIndexChanged.connect(self._render_entries)
+        self.kind_filter_combo.currentIndexChanged.connect(self._entry_filters_changed)
         search_row.addWidget(self.kind_filter_combo)
 
         self.slot_status_filter = QComboBox()
@@ -272,7 +273,7 @@ class RobloxCacheTab(QWidget):
             ('Changed since swap', 'changed'),
         ):
             self.slot_status_filter.addItem(label, value)
-        self.slot_status_filter.currentIndexChanged.connect(self._render_entries)
+        self.slot_status_filter.currentIndexChanged.connect(self._entry_filters_changed)
         search_row.addWidget(self.slot_status_filter)
 
         self.entries_count_label = QLabel('0 entries')
@@ -342,6 +343,25 @@ class RobloxCacheTab(QWidget):
         self.entries_splitter.addWidget(self.preview_panel)
         self.entries_splitter.setSizes([720, 320])
         entries_layout.addWidget(self.entries_splitter, 1)
+
+        paging_row = QHBoxLayout()
+        paging_row.addWidget(QLabel('Rows per page:'))
+        self.entries_page_size_combo = QComboBox()
+        for page_size in (100, 250, 500, 1000, 2500):
+            self.entries_page_size_combo.addItem(str(page_size), page_size)
+        self.entries_page_size_combo.setCurrentIndex(self.entries_page_size_combo.findData(250))
+        self.entries_page_size_combo.currentIndexChanged.connect(self._entry_page_size_changed)
+        paging_row.addWidget(self.entries_page_size_combo)
+        self.entries_prev_button = QPushButton('← Previous')
+        self.entries_prev_button.clicked.connect(self._previous_entries_page)
+        paging_row.addWidget(self.entries_prev_button)
+        self.entries_page_label = QLabel('Page 0 / 0')
+        paging_row.addWidget(self.entries_page_label)
+        self.entries_next_button = QPushButton('Next →')
+        self.entries_next_button.clicked.connect(self._next_entries_page)
+        paging_row.addWidget(self.entries_next_button)
+        paging_row.addStretch(1)
+        entries_layout.addLayout(paging_row)
 
         inventory_actions = QHBoxLayout()
         set_target = QPushButton('Selected → target ID')
@@ -563,11 +583,43 @@ class RobloxCacheTab(QWidget):
             visible.append(entry)
         return visible
 
+    def _entry_filters_changed(self, *_args) -> None:
+        self._entries_page_offset = 0
+        self._render_entries()
+
+    def _entry_page_size_changed(self, *_args) -> None:
+        self._entries_page_offset = 0
+        self._render_entries()
+
+    def _entry_page_size(self) -> int:
+        return int(self.entries_page_size_combo.currentData() or 250)
+
+    def _previous_entries_page(self) -> None:
+        self._entries_page_offset = max(0, self._entries_page_offset - self._entry_page_size())
+        self._render_entries()
+
+    def _next_entries_page(self) -> None:
+        self._entries_page_offset += self._entry_page_size()
+        self._render_entries()
+
     def _render_entries(self, *_args) -> None:
         visible_entries = self._visible_entries()
+        page_size = self._entry_page_size()
+        page_count = (len(visible_entries) + page_size - 1) // page_size
+        if page_count:
+            self._entries_page_offset = min(self._entries_page_offset, (page_count - 1) * page_size)
+            current_page = self._entries_page_offset // page_size + 1
+        else:
+            self._entries_page_offset = 0
+            current_page = 0
+        page_entries = visible_entries[self._entries_page_offset:self._entries_page_offset + page_size]
+        self.entries_prev_button.setEnabled(self._entries_page_offset > 0)
+        self.entries_next_button.setEnabled(self._entries_page_offset + len(page_entries) < len(visible_entries))
+        self.entries_page_label.setText(f'Page {current_page} / {page_count}' if page_count else 'Page 0 / 0')
+
         self.table.setUpdatesEnabled(False)
         self.table.setRowCount(0)
-        for entry in visible_entries:
+        for entry in page_entries:
             row = self.table.rowCount()
             self.table.insertRow(row)
             values = [
