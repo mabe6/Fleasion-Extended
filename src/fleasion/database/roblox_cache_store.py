@@ -1384,62 +1384,6 @@ class RobloxCacheStore:
             )
             shown += 1
         return '\n'.join(lines)
-, payload[:4096]):
-        return 'asset-metadata'
-    if payload.startswith((b'\x00\x01\x00\x00', b'OTTO', b'ttcf', b'wOFF', b'wOF2')):
-        return 'font'
-    if payload[:8] == b'<roblox!':
-        if b'KeyframeSequence' in payload:
-            return 'anim'
-        if b'CurveAnimation' in payload:
-            return 'curve-anim'
-        return 'rbxm'
-    if payload.startswith(b'\x89PNG'):
-        return 'png'
-    if payload.startswith(b'\xff\xd8\xff'):
-        return 'jpg'
-    # Some Roblox cache payloads add a short wrapper/prefix before the KTX header.
-    # Detect only near the start so arbitrary binary data cannot be misclassified.
-    ktx1 = b'\xabKTX 11\xbb\r\n\x1a\n'
-    ktx2 = b'\xabKTX 20\xbb\r\n\x1a\n'
-    if payload[:12] in (ktx1, ktx2) or any(
-        payload.find(magic, 1, 64) >= 0 for magic in (ktx1, ktx2)
-    ):
-        return 'ktx'
-    if payload.startswith(b'BM'):
-        return 'bmp'
-    if payload.startswith((b'GIF87a', b'GIF89a')):
-        return 'gif'
-    if len(payload) >= 12 and payload[:4] == b'RIFF' and payload[8:12] == b'WEBP':
-        return 'webp'
-    if payload.startswith((b'II*\x00', b'MM\x00*', b'II+\x00', b'MM\x00+')):
-        return 'tiff'
-    if payload.startswith(b'\x00\x00\x01\x00'):
-        return 'ico'
-    if payload.startswith(b'DDS '):
-        return 'dds'
-    if payload.startswith(b'8BPS'):
-        return 'psd'
-    if payload[:8] == b'version ':
-        return 'mesh'
-    if payload[:4] == b'OggS':
-        return 'ogg'
-    if payload[:3] == b'ID3' or payload[:2] == b'\xff\xfb':
-        return 'mp3'
-    xml_start = payload.lstrip(b'\xef\xbb\xbf \t\r\n')
-    if xml_start.startswith(b'<roblox') or (
-        xml_start.startswith(b'<?xml') and b'<roblox' in xml_start[:1024]
-    ):
-        if b'CurveAnimation' in payload:
-            return 'curve-anim'
-        if b'KeyframeSequence' in payload:
-            return 'anim'
-        return 'xml'
-    if payload[:1] in (b'{', b'['):
-        return 'json'
-    return 'other'
-
-
 def _asset_id_from_url(url: str) -> str:
     match = ASSET_ID_PATTERN.search(url)
     return next((group for group in match.groups() if group), '') if match else ''
