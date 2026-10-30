@@ -351,7 +351,7 @@ def format_asset_metadata_preview(
     if not asset_type and asset_type_id:
         asset_type = _asset_type_label(asset_type_id)
     if asset_type:
-        lines.append(f"Roblox asset type: {asset_type}")
+        lines.append(f"Asset type: {asset_type}")
     elif metadata.get("asset_type"):
         lines.append(f"Asset type: {metadata['asset_type']}")
     else:
@@ -437,9 +437,9 @@ def format_asset_metadata_preview(
     ])
     if not numeric_id:
         lines.append(
-            "The 32-character local cache hash or CDN path hash does not contain a reversible "
-            "Asset ID. Roblox's reverse-delivery lookup requires a separate MAR checksum, "
-            "which is not present in this cache record."
+            "The 32-character local cache hash or CDN path hash cannot be converted back into "
+            "an Asset ID by itself. Roblox's reverse-delivery lookup requires a separate MAR "
+            "checksum, which is not present in this cache record."
         )
     return "\n".join(lines)
 
