@@ -107,7 +107,7 @@ def test_dashboard_restores_fleasion_workflows_and_separates_advanced_sql(
         assert [
             window._replacer_modes.tabText(index)
             for index in range(window._replacer_modes.count())
-        ] == ['Asset ID (legacy)', 'Cache Hash']
+         ] == ['Cache Hash', 'Asset ID (legacy)']
         assert window._hash_replacer_tab.asset_store.root == config_dir / 'HashReplacer'
         assert window._rando_stuff_tab._hash_asset_store is window._hash_replacer_store
         assert not hasattr(window, '_hidden_replacer_tab')
