@@ -117,6 +117,10 @@ class _CacheEntryPreviewWorker(QThread):
                     prefix = handle.read(8192)
                 kind = detect_roblox_payload_kind(prefix)
                 payload = decoded_path.read_bytes()
+                if kind == 'xml' and b'CurveAnimation' in payload:
+                    kind = 'curve-anim'
+                elif kind == 'xml' and b'KeyframeSequence' in payload:
+                    kind = 'anim'
                 if self.isInterruptionRequested():
                     return
                 self.payload_ready.emit(self.entry_id, payload, kind)
