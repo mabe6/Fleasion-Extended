@@ -608,13 +608,34 @@ def load_curve_animation_data(anim_data: bytes) -> List[Keyframe]:
             return None
 
         def _vat_rbxm(inst):
+            import base64 as _base64
+
             for k, v in inst.properties.items():
                 pk = k.name if hasattr(k, 'name') else str(k)
                 if pk == 'ValuesAndTimes':
                     raw = v.value if hasattr(v, 'value') else v
-                    if raw:
-                        rb = raw.encode('latin-1') if isinstance(raw, str) else bytes(raw)
-                        return _vat(rb)
+                    if not raw:
+                        continue
+                    candidates: list[bytes] = []
+                    if isinstance(raw, str):
+                        try:
+                            candidates.append(raw.encode('latin-1'))
+                        except UnicodeEncodeError:
+                            candidates.append(raw.encode('utf-8', errors='replace'))
+                        # Some Roblox/XML serializers retain a base64 text value
+                        # rather than the decoded BinaryString blob.
+                        try:
+                            decoded = _base64.b64decode(raw, validate=True)
+                            if decoded not in candidates:
+                                candidates.append(decoded)
+                        except Exception:
+                            pass
+                    else:
+                        candidates.append(bytes(raw))
+                    for candidate in candidates:
+                        values = _vat(candidate)
+                        if values:
+                            return values
             return []
 
         def _walk_rbxm(inst):
