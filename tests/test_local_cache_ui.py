@@ -214,6 +214,81 @@ def test_scraper_db_sort_cycles_all_columns_and_restores_source_order(monkeypatc
         app.processEvents()
 
 
+
+def test_scraper_db_kind_filter_uses_grouped_multiselect_category_popup():
+    from fleasion.cache.asset_type_filter import CategoryFilterPopup
+
+    app = _qapp()
+    labels = dict(cache_tab_module._KIND_FILTER_OPTIONS)
+    assigned_kinds = [
+        kind
+        for kinds in cache_tab_module._KIND_FILTER_CATEGORIES.values()
+        for kind in kinds
+    ]
+    assert len(assigned_kinds) == len(set(assigned_kinds))
+    assert set(assigned_kinds) == set(labels)
+
+    popup = CategoryFilterPopup(
+        active_filters={'ktx'},
+        categories=cache_tab_module._KIND_FILTER_CATEGORIES,
+        type_labels=labels,
+        category_labels=cache_tab_module._KIND_FILTER_CATEGORY_LABELS,
+    )
+    emitted = []
+    popup.filters_changed.connect(lambda kinds: emitted.append(set(kinds)))
+    popup.show()
+    app.processEvents()
+
+    try:
+        grid = popup.container.layout().itemAt(0).layout()
+        assert grid.columnCount() == 4
+        assert grid.rowCount() == 2
+        assert len(popup.category_checkboxes) == 5
+        assert len(popup.checkboxes) == len(labels)
+        assert popup.checkboxes['ktx'].isChecked()
+        assert (
+            popup.category_checkboxes['images_textures'].checkState()
+            == Qt.CheckState.PartiallyChecked
+        )
+
+        # Individual type toggles stay in the same popup and preserve selections.
+        popup.checkboxes['png'].click()
+        assert popup.isVisible()
+        assert popup.active_filters == {'ktx', 'png'}
+        assert popup.category_checkboxes['images_textures'].checkState() == Qt.CheckState.PartiallyChecked
+
+        popup.checkboxes['ogg'].click()
+        assert popup.isVisible()
+        assert popup.active_filters == {'ktx', 'png', 'ogg'}
+        assert popup.category_checkboxes['audio_video'].checkState() == Qt.CheckState.PartiallyChecked
+
+        # Clicking a partially selected category selects every kind in that group.
+        popup.category_checkboxes['images_textures'].click()
+        assert popup.isVisible()
+        assert set(cache_tab_module._KIND_FILTER_CATEGORIES['images_textures']) <= popup.active_filters
+        assert (
+            popup.category_checkboxes['images_textures'].checkState()
+            == Qt.CheckState.Checked
+        )
+
+        # Clicking a fully selected category clears that group only.
+        popup.category_checkboxes['images_textures'].click()
+        assert popup.isVisible()
+        assert not (
+            set(cache_tab_module._KIND_FILTER_CATEGORIES['images_textures'])
+            & popup.active_filters
+        )
+        assert 'ogg' in popup.active_filters
+
+        popup._clear_all()
+        assert popup.isVisible()
+        assert popup.active_filters == set()
+        assert emitted[-1] == set()
+    finally:
+        popup.close()
+        app.processEvents()
+
+
 def test_cache_slots_view_has_preview_and_type_status_filters(monkeypatch, tmp_path):
     app = _qapp()
 

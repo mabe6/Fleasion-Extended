@@ -150,7 +150,15 @@ def asset_type_display_name(type_id) -> str:
 class CategoryFilterPopup(QMenu):
     filters_changed = pyqtSignal(set)
 
-    def __init__(self, parent=None, active_filters=None):
+    def __init__(
+        self,
+        parent=None,
+        active_filters=None,
+        *,
+        categories=None,
+        type_labels=None,
+        category_labels=None,
+    ):
         super().__init__(parent)
         self.setStyleSheet("""
             QMenu { background-color: palette(window); border: 1px solid palette(mid); border-radius: 4px; color: palette(window-text); }
@@ -160,6 +168,12 @@ class CategoryFilterPopup(QMenu):
         """)
 
         self.active_filters = set(active_filters) if active_filters else set()
+        source_categories = categories if categories is not None else _CATEGORY_TYPES
+        self.categories = {
+            key: list(type_ids) for key, type_ids in source_categories.items()
+        }
+        self.type_labels = dict(type_labels or {})
+        self.category_labels = dict(category_labels or {})
         self._updating = False
 
         self.container = QWidget()
@@ -170,8 +184,6 @@ class CategoryFilterPopup(QMenu):
         grid = QGridLayout()
         grid.setHorizontalSpacing(4)
         grid.setVerticalSpacing(4)
-
-        self.categories = {key: list(type_ids) for key, type_ids in _CATEGORY_TYPES.items()}
 
         self.checkboxes = {}
         self.category_checkboxes = {}
@@ -194,7 +206,10 @@ class CategoryFilterPopup(QMenu):
             vbox.setContentsMargins(6, 6, 6, 6)
             vbox.setSpacing(3)
 
-            cat_cb = QCheckBox(_category_label(cat_name))
+            cat_label = self.category_labels.get(cat_name)
+            if cat_label is None:
+                cat_label = _category_label(cat_name)
+            cat_cb = QCheckBox(cat_label)
             cat_cb.setStyleSheet('font-weight: bold; color: #55aaff;')
             cat_cb.setTristate(True)
             self.category_checkboxes[cat_name] = cat_cb
@@ -210,7 +225,9 @@ class CategoryFilterPopup(QMenu):
 
             cat_types = []
             for tid in type_ids:
-                name = asset_type_display_name(tid)
+                name = self.type_labels.get(tid)
+                if name is None:
+                    name = asset_type_display_name(tid)
                 elided = fm.elidedText(name, Qt.TextElideMode.ElideRight, 130)
                 cb = QCheckBox(elided)
                 if elided != name:

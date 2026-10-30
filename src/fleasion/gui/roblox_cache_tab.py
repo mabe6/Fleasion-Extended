@@ -10,25 +10,21 @@ import time
 from dataclasses import replace
 from pathlib import Path
 
-from PyQt6.QtCore import Qt, QThread, QTimer, pyqtSignal
+from PyQt6.QtCore import QPoint, Qt, QThread, QTimer, pyqtSignal
 from PyQt6.QtGui import QImage, QPixmap
 from PyQt6.QtWidgets import (
     QApplication,
     QAbstractItemView,
-    QCheckBox,
     QComboBox,
-    QFrame,
     QGroupBox,
     QHeaderView,
     QFileDialog,
     QHBoxLayout,
     QLabel,
     QLineEdit,
-    QMenu,
     QMessageBox,
     QPlainTextEdit,
     QPushButton,
-    QScrollArea,
     QSplitter,
     QStackedWidget,
     QTableWidget,
@@ -36,7 +32,6 @@ from PyQt6.QtWidgets import (
     QTabWidget,
     QVBoxLayout,
     QWidget,
-    QWidgetAction,
 )
 
 from ..database.animation_payload import inspect_animation_payload
@@ -129,100 +124,28 @@ _KIND_FILTER_OPTIONS = (
 )
 
 
-class _KindFilterPopup(QMenu):
-    """Searchable, scrollable multi-select filter for cache asset types."""
 
-    changed = pyqtSignal(set)
 
-    def __init__(self, options, selected: set[str], parent=None):
-        super().__init__(parent)
-        self.active = set(selected)
-        self.checkboxes: dict[str, QCheckBox] = {}
-        self.setMinimumWidth(285)
-        self.setStyleSheet(
-            'QMenu { background: palette(window); border: 1px solid palette(mid); }'
-            'QCheckBox { padding: 2px 4px; }'
-        )
 
-        container = QWidget()
-        layout = QVBoxLayout(container)
-        layout.setContentsMargins(10, 8, 10, 8)
-        layout.setSpacing(5)
-
-        self.filter_edit = QLineEdit()
-        self.filter_edit.setPlaceholderText('Search asset types…')
-        self.filter_edit.setClearButtonEnabled(True)
-        self.filter_edit.textChanged.connect(self._apply_filter)
-        layout.addWidget(self.filter_edit)
-
-        self.scroll_area = QScrollArea()
-        self.scroll_area.setWidgetResizable(True)
-        self.scroll_area.setFrameShape(QFrame.Shape.NoFrame)
-        self.scroll_area.setFixedHeight(265)
-
-        checkbox_host = QWidget()
-        checkbox_layout = QVBoxLayout(checkbox_host)
-        checkbox_layout.setContentsMargins(0, 0, 0, 0)
-        checkbox_layout.setSpacing(2)
-        for key, label in options:
-            checkbox = QCheckBox(label)
-            checkbox.setChecked(key in self.active)
-            checkbox.stateChanged.connect(
-                lambda state, kind=key: self._toggle(kind, bool(state))
-            )
-            self.checkboxes[key] = checkbox
-            checkbox_layout.addWidget(checkbox)
-        checkbox_layout.addStretch(1)
-        self.scroll_area.setWidget(checkbox_host)
-        layout.addWidget(self.scroll_area)
-
-        separator = QFrame()
-        separator.setFrameShape(QFrame.Shape.HLine)
-        separator.setFrameShadow(QFrame.Shadow.Sunken)
-        layout.addWidget(separator)
-
-        buttons = QHBoxLayout()
-        self.all_button = QPushButton('Select all')
-        self.all_button.setFixedHeight(26)
-        self.all_button.clicked.connect(self._select_all)
-        self.clear_button = QPushButton('Clear filters')
-        self.clear_button.setFixedHeight(26)
-        self.clear_button.clicked.connect(self._clear)
-        buttons.addWidget(self.all_button)
-        buttons.addWidget(self.clear_button)
-        layout.addLayout(buttons)
-
-        action = QWidgetAction(self)
-        action.setDefaultWidget(container)
-        self.addAction(action)
-
-    def _apply_filter(self, text: str) -> None:
-        needle = text.strip().casefold()
-        for checkbox in self.checkboxes.values():
-            checkbox.setVisible(not needle or needle in checkbox.text().casefold())
-
-    def _toggle(self, kind: str, checked: bool) -> None:
-        if checked:
-            self.active.add(kind)
-        else:
-            self.active.discard(kind)
-        self.changed.emit(set(self.active))
-
-    def _select_all(self) -> None:
-        self.active = set(self.checkboxes)
-        for checkbox in self.checkboxes.values():
-            checkbox.blockSignals(True)
-            checkbox.setChecked(True)
-            checkbox.blockSignals(False)
-        self.changed.emit(set(self.active))
-
-    def _clear(self) -> None:
-        self.active.clear()
-        for checkbox in self.checkboxes.values():
-            checkbox.blockSignals(True)
-            checkbox.setChecked(False)
-            checkbox.blockSignals(False)
-        self.changed.emit(set())
+_KIND_FILTER_CATEGORIES = {
+    'models_3d': ('mesh', 'csgphs', 'rbxm', 'xml'),
+    'images_textures': (
+        'png', 'jpg', 'bmp', 'gif', 'webp', 'tiff', 'ico', 'dds', 'ktx', 'psd',
+    ),
+    'audio_video': ('ogg', 'mp3', 'video-metadata', 'video-manifest'),
+    'animations': ('anim', 'curve-anim'),
+    'scripts_data': (
+        'font', 'json', 'asset-metadata', 'roblox-settings',
+        'http-response', 'compressed', 'other',
+    ),
+}
+_KIND_FILTER_CATEGORY_LABELS = {
+    'models_3d': '3D Models',
+    'images_textures': 'Images & Textures',
+    'audio_video': 'Audio & Video',
+    'animations': 'Animations',
+    'scripts_data': 'Scripts & Data',
+}
 
 
 class _CacheScanWorker(QThread):
@@ -979,14 +902,59 @@ class RobloxCacheTab(QWidget):
         return visible
 
     def _show_kind_filter(self) -> None:
-        popup = _KindFilterPopup(
-            _KIND_FILTER_OPTIONS,
-            self._active_kind_filters,
+        from ..cache.asset_type_filter import CategoryFilterPopup
+
+        popup = CategoryFilterPopup(
             parent=self,
+            active_filters=self._active_kind_filters,
+            categories=_KIND_FILTER_CATEGORIES,
+            type_labels=dict(_KIND_FILTER_OPTIONS),
+            category_labels=_KIND_FILTER_CATEGORY_LABELS,
         )
-        popup.changed.connect(self._on_kind_filters_changed)
+        popup.filters_changed.connect(self._on_kind_filters_changed)
         popup.aboutToHide.connect(popup.deleteLater)
-        popup.exec(self.kind_filter_button.mapToGlobal(self.kind_filter_button.rect().bottomLeft()))
+
+        # Keep the popup on the same monitor as its button. The upstream
+        # cache viewer uses this geometry-aware placement to avoid Qt moving
+        # a large menu to another monitor when its requested point is off-screen.
+        popup.adjustSize()
+        button_rect = self.kind_filter_button.rect()
+        button_bottom = self.kind_filter_button.mapToGlobal(button_rect.bottomLeft())
+        button_top = self.kind_filter_button.mapToGlobal(button_rect.topLeft())
+        screen = self.kind_filter_button.screen()
+        if screen is None:
+            app = QApplication.instance()
+            if app is not None:
+                screen = app.screenAt(button_bottom)
+
+        if screen is None:
+            popup.exec(button_bottom)
+            return
+
+        screen_geometry = screen.availableGeometry()
+        popup.constrain_to_available_geometry(
+            screen_geometry,
+            button_bottom.y(),
+        )
+        popup_height = popup.sizeHint().height()
+        popup_width = popup.sizeHint().width()
+
+        x = button_bottom.x()
+        if x + popup_width > screen_geometry.right():
+            x = screen_geometry.right() - popup_width
+        x = max(x, screen_geometry.left())
+
+        if button_bottom.y() + popup_height <= screen_geometry.bottom():
+            y = button_bottom.y()
+        elif button_top.y() - popup_height >= screen_geometry.top():
+            y = button_top.y() - popup_height
+        else:
+            y = max(
+                screen_geometry.top(),
+                screen_geometry.bottom() - popup_height,
+            )
+
+        popup.exec(QPoint(x, y))
 
     def _on_kind_filters_changed(self, kinds: set[str]) -> None:
         valid = {kind for kind, _label in _KIND_FILTER_OPTIONS}
