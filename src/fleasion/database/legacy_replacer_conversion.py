@@ -108,7 +108,6 @@ def convert_legacy_replacer_profile(
 
     entries = cache_store.scan()
     by_asset_id = _cache_hashes_by_asset_id(entries, cached_metadata)
-    entries_by_hash = {entry.entry_id: entry for entry in entries}
     imported_by_source: dict[str, str] = {}
     imported_asset_ids: dict[str, str] = {}
     converted_rules: dict[str, dict[str, Any]] = {}
@@ -213,8 +212,4 @@ def convert_legacy_replacer_profile(
             for asset_id in _numeric_ids(rule.get("replace_ids", []))
         }),
         "skipped": skipped,
-        "unmatched_cache_slots": sum(
-            1 for asset_id in matched_asset_ids
-            if not by_asset_id.get(asset_id)
-        ),
     }
