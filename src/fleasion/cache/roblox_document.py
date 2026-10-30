@@ -210,6 +210,7 @@ def _xml_to_document(data: bytes) -> RbxDocument:
 
     ref_map: dict[str, int] = {}
     next_ref = 1
+    auto_ref_counter = 0
 
     def mapped_ref(ref: str) -> int:
         nonlocal next_ref
@@ -228,7 +229,14 @@ def _xml_to_document(data: bytes) -> RbxDocument:
     instances: dict[int, RbxInstance] = {}
 
     def parse_item(item: ET.Element) -> RbxInstance:
-        referent_text = item.get('referent') or ''
+        nonlocal auto_ref_counter
+        referent_text = (item.get('referent') or '').strip()
+        if not referent_text:
+            # XML exports may omit referents. An empty string cannot be reused
+            # as a shared key: that collapses every such object into one ID and
+            # destroys the hierarchy when the document is written back to RBXM.
+            referent_text = f'__fleasion_auto_referent_{auto_ref_counter}'
+            auto_ref_counter += 1
         referent = mapped_ref(referent_text)
         inst = RbxInstance(class_name=item.get('class') or 'Folder', referent=referent)
         instances[referent] = inst
