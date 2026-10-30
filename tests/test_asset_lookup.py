@@ -118,7 +118,7 @@ def test_lookup_merges_developer_and_catalog_metadata() -> None:
     assert metadata['creator_id'] == '42'
     assert metadata['asset_type'] == '10'
     assert metadata['price_status'] == 'Free'
-    assert 'Roblox developer metadata' in metadata['source']
+    assert 'Roblox Develop API (legacy/deprecated)' in metadata['source']
     assert 'Roblox catalog' in metadata['source']
     assert len(session.get_calls) == 1
     assert session.post_calls[0][1]['json']['items'][0]['id'] == 12345
@@ -299,3 +299,12 @@ def test_metadata_preview_uses_encoding_from_cdn_url_when_header_is_absent() -> 
     )
 
     assert 'Compression: Zstandard (Zstd)' in preview
+
+
+def test_asset_type_labels_cover_extended_animation_and_accessory_types() -> None:
+    from fleasion.utils.asset_lookup import _asset_type_label
+
+    assert _asset_type_label('4') == 'Mesh (ID 4)'
+    assert _asset_type_label('24') == 'Animation (ID 24)'
+    assert _asset_type_label('55') == 'Walk Animation (ID 55)'
+    assert _asset_type_label('93') == 'Text Document (ID 93)'
