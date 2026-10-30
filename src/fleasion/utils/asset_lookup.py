@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import re
 import tempfile
@@ -10,7 +11,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
-from urllib.parse import urljoin, urlparse
+from urllib.parse import parse_qs, urljoin, urlparse
 
 import requests
 
@@ -23,7 +24,7 @@ _ASSET_ID_RE = re.compile(
 )
 _CDN_HASH_RE = re.compile(r'/(?:v\d+/)?sc\d/([0-9a-f]{32})(?:[/?]|$)', re.IGNORECASE)
 _CACHE_HEADER_RE = re.compile(
-    rb'(?im)^\s*(?:roblox-)?(assetid|assetversionnumber|assettypeid|asset-recordable|assetname|creatorid)\s*:\s*([^\r\n]+)'
+    rb'(?im)^\s*(?:roblox-)?(assetid|assetversionnumber|assettypeid|asset-recordable|assetname|assetdescription|creatorid|creatorname|creatortype)\s*:\s*([^\r\n]+)'
 )
 _HTTP_METADATA_HEADER_RE = re.compile(
     rb'(?im)^\s*([a-z][a-z0-9-]{0,79})\s*:\s*([^\r\n]{1,512})\s*$'
@@ -73,6 +74,8 @@ _ASSET_TYPE_NAMES = {
 _USER_AGENT = 'Fleasion/2.x (Roblox cache asset lookup)'
 _DEVELOP_ASSETS_URL = 'https://develop.roblox.com/v1/assets'
 _CATALOG_DETAILS_URL = 'https://catalog.roblox.com/v1/catalog/items/details'
+# Public compatibility endpoint. This is not the authenticated Open Cloud Assets API.
+_ECONOMY_ASSET_DETAILS_URL = 'https://economy.roblox.com/v2/assets/{asset_id}/details'
 _ASSET_DELIVERY_URL = 'https://assetdelivery.roblox.com/v2/assetId/{asset_id}'
 
 
@@ -172,6 +175,43 @@ def _metadata_from_catalog(body: Any, asset_id: str) -> dict[str, str]:
     }
 
 
+def _metadata_from_economy(body: Any, asset_id: str) -> dict[str, str]:
+    """Normalise the public legacy Economy API response as a best-effort fallback."""
+    if not isinstance(body, dict):
+        return {}
+    returned_id = _metadata_text(body.get('AssetId') or body.get('TargetId'))
+    if returned_id and returned_id != asset_id:
+        return {}
+
+    creator = body.get('Creator')
+    creator = creator if isinstance(creator, dict) else {}
+    asset_type_id = _metadata_text(body.get('AssetTypeId'))
+    is_for_sale = body.get('IsForSale')
+    price = body.get('PriceInRobux')
+    result = {
+        'name': _metadata_text(body.get('Name')),
+        'description': _metadata_text(body.get('Description')),
+        'creator_name': _metadata_text(creator.get('Name')),
+        'creator_type': _metadata_text(creator.get('CreatorType')),
+        'creator_id': _metadata_text(
+            creator.get('CreatorTargetId') or creator.get('Id')
+        ),
+        'created_at': _metadata_text(body.get('Created')),
+        'updated_at': _metadata_text(body.get('Updated')),
+        'asset_type': asset_type_id,
+        'asset_type_id': asset_type_id,
+        'asset_type_label': _asset_type_label(asset_type_id) if asset_type_id else '',
+        'price': f'{price} Robux' if price is not None else '',
+        'price_status': (
+            'For sale' if is_for_sale is True
+            else 'Off sale' if is_for_sale is False
+            else ''
+        ),
+        'is_public_domain': _metadata_text(body.get('IsPublicDomain')),
+    }
+    return {key: value for key, value in result.items() if value}
+
+
 def lookup_asset_metadata(
     value: str,
     *,
@@ -215,6 +255,29 @@ def lookup_asset_metadata(
                 sources.append('Roblox catalog')
         except (requests.RequestException, ValueError, TypeError) as exc:
             errors.append(f'catalog metadata: {type(exc).__name__}')
+
+        # The current official Assets API exposes richer metadata through Open
+        # Cloud authentication. Try the public legacy details route only when
+        # the unauthenticated developer/catalog responses left material gaps.
+        missing_core_metadata = any(
+            not metadata.get(key)
+            for key in ('name', 'creator_name', 'asset_type', 'created_at')
+        )
+        if missing_core_metadata:
+            try:
+                response = client.get(
+                    _ECONOMY_ASSET_DETAILS_URL.format(asset_id=asset_id),
+                    timeout=8,
+                )
+                response.raise_for_status()
+                economy = _metadata_from_economy(response.json(), asset_id)
+                for key, value in economy.items():
+                    if value and not metadata.get(key):
+                        metadata[key] = value
+                if economy:
+                    sources.append('Roblox Economy API (legacy fallback)')
+            except (requests.RequestException, ValueError, TypeError) as exc:
+                errors.append(f'economy fallback: {type(exc).__name__}')
     finally:
         if owns_session:
             client.close()
@@ -309,26 +372,92 @@ def _cache_header_metadata(payload: bytes) -> dict[str, str]:
             metadata['asset_recordable'] = value
         elif key == 'assetname':
             metadata['name'] = value
+        elif key == 'assetdescription':
+            metadata['description'] = value
         elif key == 'creatorid' and value.isdigit():
             metadata['creator_id'] = value
+        elif key == 'creatorname':
+            metadata['creator_name'] = value
+        elif key == 'creatortype':
+            metadata['creator_type'] = value
 
     header_names = {
         'content-type': 'cdn_content_type',
         'content-encoding': 'cdn_content_encoding',
         'content-length': 'cdn_content_length',
+        'content-disposition': 'cdn_content_disposition',
+        'content-range': 'cdn_content_range',
         'last-modified': 'cdn_last_modified',
         'x-rbx-uncompressed-size-bytes': 'uncompressed_size',
         'x-rbx-zstd-dict-sha': 'zstd_dictionary_sha256',
         'cache-control': 'cache_control',
         'etag': 'etag',
         'date': 'response_date',
+        'expires': 'response_expires',
         'server': 'cdn_server',
+        'accept-ranges': 'accept_ranges',
     }
     for raw_key, raw_value in _HTTP_METADATA_HEADER_RE.findall(sample):
         key = raw_key.decode('ascii', errors='ignore').casefold()
         target = header_names.get(key)
         if target and target not in metadata:
             metadata[target] = raw_value.decode('latin-1', errors='replace').strip()
+
+    # Some cached metadata responses are JSON rather than textual HTTP headers.
+    # Parse only recognised Roblox asset fields; leave unrelated JSON untouched.
+    try:
+        body = json.loads(sample.decode('utf-8-sig'))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        body = None
+    if isinstance(body, dict):
+        candidates = [body]
+        for nested_key in ('data', 'asset', 'metadata', 'result'):
+            nested = body.get(nested_key)
+            if isinstance(nested, dict):
+                candidates.append(nested)
+            elif isinstance(nested, list):
+                candidates.extend(item for item in nested if isinstance(item, dict))
+        for record in candidates:
+            normalised = {str(key).casefold(): value for key, value in record.items()}
+            creator = normalised.get('creator')
+            creator = creator if isinstance(creator, dict) else {}
+            creator = {str(key).casefold(): value for key, value in creator.items()}
+            json_values = {
+                'asset_id': normalised.get('assetid') or normalised.get('targetid'),
+                'asset_version': normalised.get('assetversionnumber'),
+                'asset_type_id': normalised.get('assettypeid') or normalised.get('typeid'),
+                'name': normalised.get('name'),
+                'description': normalised.get('description'),
+                'creator_name': (
+                    normalised.get('creatorname')
+                    or creator.get('name')
+                    or creator.get('displayname')
+                ),
+                'creator_type': (
+                    normalised.get('creatortype')
+                    or creator.get('creatortype')
+                    or creator.get('type')
+                ),
+                'creator_id': (
+                    normalised.get('creatortargetid')
+                    or creator.get('creatortargetid')
+                    or creator.get('id')
+                ),
+                'created_at': normalised.get('created'),
+                'updated_at': normalised.get('updated'),
+            }
+            if not any(json_values.get(key) for key in (
+                'asset_id', 'asset_type_id', 'name', 'creator_name'
+            )):
+                continue
+            for key, raw_value in json_values.items():
+                value = _metadata_text(raw_value)
+                if value and key not in metadata:
+                    metadata[key] = value
+            type_id = metadata.get('asset_type_id')
+            if type_id and type_id.isdigit():
+                metadata.setdefault('asset_type_label', _asset_type_label(type_id))
+            break
     return metadata
 
 
@@ -373,6 +502,8 @@ def format_asset_metadata_preview(
         ("price_status", "Price status"),
         ("favorite_count", "Favorites"),
         ("asset_recordable", "Recordable"),
+        ("asset_format", "Asset format"),
+        ("is_public_domain", "Public domain"),
     ):
         value = str(metadata.get(key) or "").strip()
         if value:
@@ -380,6 +511,9 @@ def format_asset_metadata_preview(
 
     lines.append("")
     encoding = str(metadata.get("cdn_content_encoding") or "").strip()
+    if not encoding and source_url:
+        query_encoding = parse_qs(urlparse(source_url).query).get('encoding', [''])[0]
+        encoding = str(query_encoding or '').strip()
     content_type = str(metadata.get("cdn_content_type") or "").strip()
     if content_type:
         lines.append(f"Response content type: {content_type}")
@@ -397,10 +531,15 @@ def format_asset_metadata_preview(
             lines.append("Compression: GZip.")
     for key, label in (
         ("cdn_content_length", "Compressed response size"),
+        ("cdn_content_disposition", "Content disposition"),
+        ("cdn_content_range", "Content range"),
         ("uncompressed_size", "Uncompressed size"),
         ("cdn_last_modified", "Last modified"),
         ("etag", "ETag"),
         ("zstd_dictionary_sha256", "Zstandard dictionary SHA-256"),
+        ("cache_control", "Cache control"),
+        ("etag", "ETag"),
+        ("cdn_server", "CDN server"),
         ("cdn_probe_status", "CDN metadata probe"),
     ):
         value = str(metadata.get(key) or "").strip()
@@ -510,9 +649,17 @@ def _probe_cached_url(
             'roblox-assetid': 'asset_id',
             'roblox-assetversionnumber': 'asset_version',
             'roblox-assettypeid': 'asset_type_id',
+            'roblox-asset-recordable': 'asset_recordable',
             'x-rbx-uncompressed-size-bytes': 'uncompressed_size',
+            'x-rbx-zstd-dict-sha': 'zstd_dictionary_sha256',
             'content-type': 'cdn_content_type',
+            'content-encoding': 'cdn_content_encoding',
             'content-length': 'cdn_content_length',
+            'content-disposition': 'cdn_content_disposition',
+            'cache-control': 'cache_control',
+            'etag': 'etag',
+            'date': 'response_date',
+            'server': 'cdn_server',
             'last-modified': 'cdn_last_modified',
         }
         for source, target in header_map.items():
