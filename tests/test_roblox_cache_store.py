@@ -517,3 +517,50 @@ def test_streaming_file_decompression_handles_zstd_payload_over_50_mib(tmp_path)
     assert decoded_size == len(expected)
     assert destination.stat().st_size == len(expected)
     assert destination.read_bytes() == expected
+
+
+
+def test_dcz_cache_resource_and_embedded_http_headers_are_recognised() -> None:
+    url = (
+        'https://clientsettingscdn.roblox.com/v2/settings-compressed/'
+        'application/PCDesktopClient/abcdef0123456789.dcz'
+    )
+    payload = (
+        b'access-control-allow-methods: GET,OPTIONS\r\n'
+        b'access-control-allow-origin: *\r\n'
+        b'access-control-expose-headers: Rbx-Cdn-Provider,Akamai-Request-BC\r\n'
+        b'cache-control: public, max-age=30\r\n'
+        b'content-encoding: dcz\r\n'
+        b'content-type: application/octet-stream\r\n'
+        b'x-rbx-zstd-dict-sha: ' + b'a' * 64 + b'\r\n'
+        b'\r\n' + bytes(range(32))
+    )
+    assert detect_roblox_payload_kind(payload, url=url) == 'roblox-settings'
+
+    parsed = store_module.parse_cached_http_response(payload)
+    assert parsed is not None
+    headers, body = parsed
+    assert headers['content-encoding'] == 'dcz'
+    assert headers['x-rbx-zstd-dict-sha'] == 'a' * 64
+    assert body == bytes(range(32))
+
+    preview = store_module.format_cached_http_response_preview(payload, url)
+    assert 'Content encoding: dcz' in preview
+    assert 'Zstandard dictionary SHA-256: ' + 'a' * 64 in preview
+
+
+def test_dcz_without_embedded_headers_is_described_without_hex_dump() -> None:
+    url = 'https://clientsettingscdn.roblox.com/v2/settings-compressed/application/abc.dcz'
+    preview = store_module.format_cached_http_response_preview(
+        b'\x28\xb5\x2f\xfd' + bytes(24), url
+    )
+    assert 'Roblox client settings resource (DCZ)' in preview
+    assert 'without the matching dictionary' in preview
+
+
+def test_hls_playlist_and_video_metadata_are_not_asset_ids() -> None:
+    playlist_url = 'https://sc5.rbxcdn.com/c/hash/hash/main.m3u8?__token__=signed'
+    playlist = b'#EXTM3U\n#EXT-X-VERSION:3\n#EXTINF:4.0,\nsegment0.ts\n'
+    assert detect_roblox_payload_kind(playlist, url=playlist_url) == 'video-manifest'
+    video_marker = b'roblox-assettypeid: 86\r\n'
+    assert detect_roblox_payload_kind(video_marker, url=playlist_url) == 'video-metadata'

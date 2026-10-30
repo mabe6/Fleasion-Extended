@@ -462,6 +462,40 @@ class RbxmPreviewWidget(QWidget):
             shared_strings=shared_strings,
         )
 
+    def animation_names(self) -> list[str]:
+        """Return named animation objects and folders that contain animation data."""
+        if self.document is None:
+            return []
+
+        animation_classes = {'Animation', 'KeyframeSequence', 'CurveAnimation'}
+        animation_data_classes = animation_classes | {'Keyframe', 'Pose'}
+        names: list[str] = []
+        seen: set[str] = set()
+
+        def add_name(value: str) -> None:
+            cleaned = str(value or '').strip()
+            if cleaned and cleaned.casefold() not in seen:
+                seen.add(cleaned.casefold())
+                names.append(cleaned)
+
+        def contains_animation_data(instance: PreviewInstance) -> bool:
+            if instance.class_name in animation_data_classes:
+                return True
+            return any(contains_animation_data(child) for child in instance.children)
+
+        def visit(instance: PreviewInstance) -> None:
+            if instance.class_name in animation_classes:
+                add_name(instance.name or instance.class_name)
+            elif instance.class_name == 'Folder' and instance.name:
+                if any(contains_animation_data(child) for child in instance.children):
+                    add_name(instance.name)
+            for child in instance.children:
+                visit(child)
+
+        for root in self.document.roots:
+            visit(root)
+        return names
+
     def _populate_tree(self, asset_label: str) -> None:
         self.tree.clear()
         self.properties_table.setRowCount(0)

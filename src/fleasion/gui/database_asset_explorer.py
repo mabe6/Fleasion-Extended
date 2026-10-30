@@ -46,6 +46,7 @@ from ..database.roblox_cache_store import (
     RobloxCacheStore,
     decompress_roblox_payload_file,
     detect_roblox_payload_kind,
+    format_cached_http_response_preview,
     split_rbxh_entry,
 )
 from ..database.sqlite_browser import SQLiteBrowser, SQLiteBrowserError, quote_identifier
@@ -101,6 +102,10 @@ _KIND_LABELS = {
     'mp3': 'MP3 audio',
     'json': 'JSON data',
     'asset-metadata': 'Roblox asset metadata',
+    'roblox-settings': 'Roblox client settings (DCZ)',
+    'video-metadata': 'Video resource metadata',
+    'video-manifest': 'HLS video playlist (M3U8)',
+    'http-response': 'Cached HTTP response',
     'compressed': 'Compressed payload (type determined on open)',
     'other': 'Unknown format',
 }
@@ -128,6 +133,10 @@ _KIND_ORDER = (
     'font',
     'json',
     'asset-metadata',
+    'roblox-settings',
+    'video-metadata',
+    'video-manifest',
+    'http-response',
     'compressed',
     'other',
 )
@@ -150,7 +159,7 @@ def _detect_kind(sample: bytes) -> tuple[str, str]:
         payload = sample
     if payload.startswith((b'\x1f\x8b', b'\x28\xb5\x2f\xfd')):
         return 'compressed', url
-    kind = detect_roblox_payload_kind(payload)
+    kind = detect_roblox_payload_kind(payload, url=url)
     # Some XML assets contain animations but have no binary RBXM signature.
     if kind == 'xml' and b'CurveAnimation' in payload:
         kind = 'curve-anim'
@@ -178,6 +187,10 @@ def _kind_group(kind: str) -> str:
         return 'Audio'
     if kind == 'font':
         return 'Fonts'
+    if kind in {'video-metadata', 'video-manifest'}:
+        return 'Video'
+    if kind == 'roblox-settings':
+        return 'Settings'
     return 'Other'
 
 
@@ -432,7 +445,7 @@ class _AssetPreviewWorker(QThread):
             with tempfile.TemporaryDirectory(prefix='fleasion-asset-preview-') as folder:
                 raw_path = Path(folder) / 'payload.raw'
                 decoded_path = Path(folder) / 'payload.decoded'
-                store.copy_entry_payload_to_file(self.entry_id, raw_path)
+                source_url, _raw_size = store.copy_entry_payload_to_file(self.entry_id, raw_path)
                 if self.isInterruptionRequested():
                     return
                 decompress_roblox_payload_file(raw_path, decoded_path)
@@ -440,7 +453,7 @@ class _AssetPreviewWorker(QThread):
                     return
                 with decoded_path.open('rb') as handle:
                     prefix = handle.read(8192)
-                kind = detect_roblox_payload_kind(prefix)
+                kind = detect_roblox_payload_kind(prefix, url=source_url)
                 # Animation names may appear after the RBXM/XML signature.
                 payload = decoded_path.read_bytes()
                 if kind == 'xml' and b'CurveAnimation' in payload:
@@ -470,6 +483,8 @@ class DatabaseAssetExplorer(QWidget):
         self._current_image: QImage | None = None
         self._current_request_id = ''
         self._preview_workers: set[_AssetPreviewWorker] = set()
+        self._decoder_workers: set[QThread] = set()
+        self._preview_stopped = False
         self._preview_enabled = bool(self._settings().get('asset_database_preview_enabled', True))
         self._page_offset = 0
         self._scan_note = ''
@@ -601,6 +616,7 @@ class DatabaseAssetExplorer(QWidget):
         self.asset_table.setColumnHidden(7, True)
         self.asset_table.setColumnHidden(8, True)
         self.asset_table.itemSelectionChanged.connect(self._selection_changed)
+        self.asset_table.itemClicked.connect(self._asset_row_clicked)
         table_layout.addWidget(self.asset_table, 1)
 
         paging = QHBoxLayout()
@@ -631,9 +647,16 @@ class DatabaseAssetExplorer(QWidget):
         preview_layout.setContentsMargins(8, 0, 0, 0)
         preview_layout.setSpacing(5)
 
+        preview_title_row = QHBoxLayout()
         self.preview_title = QLabel('Preview')
         self.preview_title.setStyleSheet('font-weight: 600;')
-        preview_layout.addWidget(self.preview_title)
+        preview_title_row.addWidget(self.preview_title, 1)
+        self.stop_preview_button = QPushButton('Stop preview')
+        self.stop_preview_button.setToolTip('Stop decoding the selected cache entry')
+        self.stop_preview_button.setVisible(False)
+        self.stop_preview_button.clicked.connect(self._stop_preview)
+        preview_title_row.addWidget(self.stop_preview_button)
+        preview_layout.addLayout(preview_title_row)
 
         self.preview_details = QLabel(
             'Select a row to preview an image, animation, mesh, Roblox model, audio, font or data payload.'
@@ -1147,6 +1170,8 @@ class DatabaseAssetExplorer(QWidget):
     def _selection_changed(self) -> None:
         item = self._selected_item()
         if item is None:
+            self.stop_preview_button.setVisible(False)
+            self._reset_preview_widgets()
             return
         was_hidden = self.preview_panel.isHidden()
         self.preview_panel.show()
@@ -1155,14 +1180,28 @@ class DatabaseAssetExplorer(QWidget):
 
         self._current_entry_id = item.entry_id
         self._current_request_id = item.entry_id
+        self._preview_stopped = False
+        self.stop_preview_button.setVisible(self._preview_enabled)
         self.copy_id_button.setEnabled(True)
         self.copy_asset_button.setEnabled(bool(item.asset_id))
         self.export_button.setEnabled(True)
 
         name = _display_name(item)
         self.preview_title.setText(name)
+        if item.asset_id:
+            asset_id_label = item.asset_id
+        elif item.kind == 'roblox-settings':
+            asset_id_label = 'not applicable (client settings resource)'
+        elif item.kind in {'video-metadata', 'video-manifest'}:
+            asset_id_label = 'not applicable (video resource)'
+        elif item.kind == 'http-response':
+            asset_id_label = 'not applicable (cached HTTP response)'
+        elif item.kind == 'asset-metadata':
+            asset_id_label = 'not included in the type marker'
+        else:
+            asset_id_label = 'not embedded in cache URL'
         detail = [
-            f'Asset ID: {item.asset_id or "not found in cache URL"}',
+            f'Asset ID: {asset_id_label}',
             f'Type: {_KIND_LABELS.get(item.kind, item.kind)}',
             f'Payload: {_format_size(item.content_size)}  ·  DB size: {_format_size(item.db_size)}',
             f'Cache entry: {item.entry_id}',
@@ -1178,6 +1217,7 @@ class DatabaseAssetExplorer(QWidget):
         detail.append(f'Last accessed: {_format_atime(item.atime)}')
         self.preview_details.setText('\n'.join(detail))
         if not self._preview_enabled:
+            self.stop_preview_button.setVisible(False)
             self.preview_panel.hide()
             self._reset_preview_widgets()
             return
@@ -1193,6 +1233,7 @@ class DatabaseAssetExplorer(QWidget):
             save()
 
         if not self._preview_enabled:
+            self.stop_preview_button.setVisible(False)
             self.preview_panel.hide()
             self._reset_preview_widgets()
             return
@@ -1202,6 +1243,20 @@ class DatabaseAssetExplorer(QWidget):
         else:
             self.preview_panel.hide()
 
+    def _track_decoder_worker(self, attribute: str, worker: QThread) -> None:
+        setattr(self, attribute, worker)
+        self._decoder_workers.add(worker)
+        worker.finished.connect(
+            lambda current=worker, attr=attribute: self._decoder_worker_finished(attr, current)
+        )
+        worker.finished.connect(worker.deleteLater)
+        worker.start()
+
+    def _decoder_worker_finished(self, attribute: str, worker: QThread) -> None:
+        self._decoder_workers.discard(worker)
+        if getattr(self, attribute, None) is worker:
+            setattr(self, attribute, None)
+
     def _stop_loader(self, attribute: str) -> None:
         worker = getattr(self, attribute, None)
         if worker is None:
@@ -1210,15 +1265,15 @@ class DatabaseAssetExplorer(QWidget):
             stop = getattr(worker, 'stop', None)
             if callable(stop):
                 stop()
-            worker.quit()
-            worker.wait()
-            worker.deleteLater()
+            worker.requestInterruption()
         except RuntimeError:
             pass
         setattr(self, attribute, None)
 
     def _reset_preview_widgets(self) -> None:
         self._current_request_id = ''
+        for worker in tuple(self._preview_workers):
+            worker.requestInterruption()
         self._stop_loader('_image_loader')
         self._stop_loader('_mesh_loader')
 
@@ -1264,6 +1319,26 @@ class DatabaseAssetExplorer(QWidget):
         self._current_image = None
         self.preview_stack.setCurrentWidget(self.info_preview)
 
+    def _asset_row_clicked(self, item) -> None:
+        """Allow the currently selected entry to reopen after Stop preview."""
+        del item
+        if not self._preview_stopped or not self._preview_enabled:
+            return
+        selected = self._selected_item()
+        if selected is None:
+            return
+        self._preview_stopped = False
+        self.stop_preview_button.setVisible(True)
+        self._load_preview(selected)
+
+    def _stop_preview(self) -> None:
+        """Cancel visible preview work without waiting on decoding in the UI thread."""
+        self._preview_stopped = True
+        self.stop_preview_button.setVisible(False)
+        self._current_request_id = ''
+        self._reset_preview_widgets()
+        self._show_info('Preview stopped. Click the selected row again to reopen it.')
+
     def _load_preview(self, item: _AssetItem) -> None:
         self._reset_preview_widgets()
         request_id = item.entry_id
@@ -1289,7 +1364,7 @@ class DatabaseAssetExplorer(QWidget):
         item = self.items_by_id.get(request_id)
         if item is None:
             return
-        if item.kind == 'compressed':
+        if item.kind in {'compressed', 'other'} and kind != 'other':
             item.kind = kind
             row = self.asset_table.currentRow()
             if row >= 0 and self.asset_table.item(row, 4) is not None:
@@ -1298,18 +1373,32 @@ class DatabaseAssetExplorer(QWidget):
                 )
         try:
             if item.kind in _IMAGE_KINDS:
+                if item.kind == 'ktx':
+                    from ..cache.tools.ktx_to_png.ktx_to_png import inspect_texture_metadata
+
+                    texture = inspect_texture_metadata(payload)
+                    if texture:
+                        detail_lines = [
+                            f'Texture: {texture["container"]} · {texture["width"]}×{texture["height"]}',
+                            f'Layers: {texture["layers"]} · Faces: {texture["faces"]} · Mip levels: {texture["mip_levels"]}',
+                            f'Format: {texture["format"]}',
+                        ]
+                        self.preview_details.setText(
+                            self.preview_details.text() + '\n' + '\n'.join(detail_lines)
+                            + '\nPreview displays the base mip level and first layer/face.'
+                        )
                 from ..cache.cache_viewer import ImageLoaderThread
 
-                self._image_loader = ImageLoaderThread(payload)
-                self._image_loader.image_ready.connect(
+                image_loader = ImageLoaderThread(payload)
+                image_loader.image_ready.connect(
                     lambda rgba, width, height, rid=request_id: self._on_image_ready(
                         rid, rgba, width, height
                     )
                 )
-                self._image_loader.error.connect(
+                image_loader.error.connect(
                     lambda error, rid=request_id: self._on_preview_error(rid, error)
                 )
-                self._image_loader.start()
+                self._track_decoder_worker('_image_loader', image_loader)
                 self.info_preview.setText('Loading image preview…')
                 self.preview_stack.setCurrentWidget(self.info_preview)
             elif item.kind in {'anim', 'curve-anim'}:
@@ -1328,14 +1417,14 @@ class DatabaseAssetExplorer(QWidget):
             elif item.kind == 'mesh':
                 from ..cache.cache_viewer import MeshLoaderThread
 
-                self._mesh_loader = MeshLoaderThread(payload, item.asset_id or item.entry_id[:12])
-                self._mesh_loader.mesh_ready.connect(
+                mesh_loader = MeshLoaderThread(payload, item.asset_id or item.entry_id[:12])
+                mesh_loader.mesh_ready.connect(
                     lambda obj_text, rid=request_id: self._on_mesh_ready(rid, obj_text)
                 )
-                self._mesh_loader.error.connect(
+                mesh_loader.error.connect(
                     lambda error, rid=request_id: self._on_preview_error(rid, error)
                 )
-                self._mesh_loader.start()
+                self._track_decoder_worker('_mesh_loader', mesh_loader)
                 self.info_preview.setText('Converting mesh to a 3D preview…')
                 self.preview_stack.setCurrentWidget(self.info_preview)
             elif item.kind == 'rbxm' and (
@@ -1353,6 +1442,18 @@ class DatabaseAssetExplorer(QWidget):
                     self._model_panel.add_property_btn.setEnabled(False)
                     self.preview_stack.addWidget(self._model_panel)
                 self._model_panel.load_bytes(payload, item.asset_id or item.entry_id[:12])
+                animation_names = self._model_panel.animation_names()
+                if animation_names:
+                    self.preview_details.setText(
+                        self.preview_details.text()
+                        + '\nAnimations in model: ' + ', '.join(animation_names[:30])
+                    )
+                if self._model_panel.document and self._model_panel.document.roots:
+                    root_name = self._model_panel.document.roots[0].name
+                    if root_name:
+                        item.name = root_name
+                        self.preview_title.setText(root_name)
+                        self._render_items()
                 self.preview_stack.setCurrentWidget(self._model_panel)
             elif item.kind in {'xml'} and (
                 payload.startswith(b'<roblox!') or payload.lstrip().startswith(b'<roblox')
@@ -1369,6 +1470,18 @@ class DatabaseAssetExplorer(QWidget):
                     self._model_panel.add_property_btn.setEnabled(False)
                     self.preview_stack.addWidget(self._model_panel)
                 self._model_panel.load_bytes(payload, item.asset_id or item.entry_id[:12])
+                animation_names = self._model_panel.animation_names()
+                if animation_names:
+                    self.preview_details.setText(
+                        self.preview_details.text()
+                        + '\nAnimations in model: ' + ', '.join(animation_names[:30])
+                    )
+                if self._model_panel.document and self._model_panel.document.roots:
+                    root_name = self._model_panel.document.roots[0].name
+                    if root_name:
+                        item.name = root_name
+                        self.preview_title.setText(root_name)
+                        self._render_items()
                 self.preview_stack.setCurrentWidget(self._model_panel)
             elif item.kind in _AUDIO_KINDS:
                 self._load_audio_preview(payload, item, request_id)
@@ -1382,6 +1495,13 @@ class DatabaseAssetExplorer(QWidget):
                 self._load_json_preview(payload)
             elif item.kind in {'xml', 'asset-metadata'}:
                 self.text_preview.setPlainText(self._format_text_payload(payload))
+                self.preview_stack.setCurrentWidget(self.text_preview)
+            elif item.kind in {'roblox-settings', 'video-metadata', 'video-manifest', 'http-response'}:
+                self.text_preview.setPlainText(
+                    format_cached_http_response_preview(payload, item.url)
+                    if item.kind != 'video-manifest' or not payload.lstrip().startswith(b'#EXTM3U')
+                    else payload[:20000].decode('utf-8', errors='replace')
+                )
                 self.preview_stack.setCurrentWidget(self.text_preview)
             else:
                 sample = payload[:4096]
@@ -1677,14 +1797,24 @@ class DatabaseAssetExplorer(QWidget):
         if self._name_resolver is not None and self._name_resolver.isRunning():
             self._name_resolver.stop()
             self._name_resolver.wait()
-        self._stop_loader('_image_loader')
-        self._stop_loader('_mesh_loader')
-        workers = tuple(self._preview_workers)
-        for worker in workers:
+
+        for worker in tuple(self._preview_workers):
             worker.requestInterruption()
-        for worker in workers:
+        for worker in tuple(self._preview_workers):
             worker.wait()
         self._preview_workers.clear()
+
+        for worker in tuple(self._decoder_workers):
+            try:
+                stop = getattr(worker, 'stop', None)
+                if callable(stop):
+                    stop()
+                worker.requestInterruption()
+            except RuntimeError:
+                pass
+        for worker in tuple(self._decoder_workers):
+            worker.wait()
+        self._decoder_workers.clear()
 
     def closeEvent(self, event) -> None:
         self._shutdown_workers()

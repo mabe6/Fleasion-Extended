@@ -15,10 +15,13 @@ on:
       - "src/fleasion/gui/roblox_cache_tab.py"
       - "src/fleasion/cache/cache_viewer.py"
       - "src/fleasion/cache/mesh_processing.py"
+      - "src/fleasion/cache/rbxm_preview.py"
+      - "src/fleasion/cache/tools/ktx_to_png/ktx_to_png.py"
       - "tests/test_mesh_processing.py"
       - "src/fleasion/gui/settings_tab.py"
       - "src/fleasion/gui/replacer_config.py"
       - "tests/test_local_cache_ui.py"
+      - "tests/test_local_database_editor_ui.py"
       - "src/fleasion/proxy/addons/cache_scraper.py"
       - "src/fleasion/proxy/server.py"
       - "tests/test_cache_scraper_places.py"
@@ -46,10 +49,13 @@ on:
       - "src/fleasion/gui/roblox_cache_tab.py"
       - "src/fleasion/cache/cache_viewer.py"
       - "src/fleasion/cache/mesh_processing.py"
+      - "src/fleasion/cache/rbxm_preview.py"
+      - "src/fleasion/cache/tools/ktx_to_png/ktx_to_png.py"
       - "tests/test_mesh_processing.py"
       - "src/fleasion/gui/settings_tab.py"
       - "src/fleasion/gui/replacer_config.py"
       - "tests/test_local_cache_ui.py"
+      - "tests/test_local_database_editor_ui.py"
       - "src/fleasion/proxy/addons/cache_scraper.py"
       - "src/fleasion/proxy/server.py"
       - "tests/test_cache_scraper_places.py"
@@ -109,10 +115,17 @@ jobs:
           src/fleasion/gui/roblox_cache_tab.py
           src/fleasion/cache/cache_viewer.py
           src/fleasion/cache/mesh_processing.py
+          src/fleasion/cache/rbxm_preview.py
+          src/fleasion/cache/tools/ktx_to_png/ktx_to_png.py
           tests/test_mesh_processing.py
+          tests/test_local_database_editor_ui.py
+          tests/test_database_asset_explorer.py
+          tests/test_roblox_cache_store.py
+          tests/test_local_cache_ui.py
           src/fleasion/gui/settings_tab.py
           src/fleasion/gui/replacer_config.py
           tests/test_local_cache_ui.py
+          tests/test_local_database_editor_ui.py
           tests/test_animation_payload.py tests/test_animation_convert.py tests/test_cache_scraper_places.py
           tests/test_animation_convert.py
           tests/test_proxy_tab_visibility.py
@@ -128,4 +141,4 @@ jobs:
           tests/test_local_database_mode.py
 
       - name: Run local database tests
-        run: uv run pytest -q tests/test_sqlite_browser.py tests/test_database_asset_explorer.py tests/test_proxy_tab_visibility.py tests/test_local_database_mode.py tests/test_roblox_cache_store.py tests/test_local_cache_ui.py tests/test_animation_payload.py tests/test_animation_convert.py tests/test_cache_scraper_places.py tests/test_asset_lookup.py tests/test_mesh_processing.py
+        run: uv run pytest -q tests/test_sqlite_browser.py tests/test_database_asset_explorer.py tests/test_proxy_tab_visibility.py tests/test_local_database_mode.py tests/test_roblox_cache_store.py tests/test_local_cache_ui.py tests/test_animation_payload.py tests/test_animation_convert.py tests/test_cache_scraper_places.py tests/test_asset_lookup.py tests/test_mesh_processing.py tests/test_local_database_editor_ui.py

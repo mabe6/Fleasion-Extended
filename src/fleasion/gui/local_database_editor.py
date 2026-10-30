@@ -110,6 +110,13 @@ class LocalDatabaseEditorWidget(QWidget):
         open_button = QPushButton("Open")
         open_button.clicked.connect(self._open_path_from_line)
         file_row.addWidget(open_button)
+        file_row.addWidget(QLabel("Recent DB:"))
+        self.database_combo = QComboBox()
+        self.database_combo.setMinimumWidth(190)
+        self.database_combo.setMaximumWidth(320)
+        self.database_combo.setToolTip("Choose one of the databases found or opened in this session.")
+        self.database_combo.currentIndexChanged.connect(self._database_combo_changed)
+        file_row.addWidget(self.database_combo)
         root.addLayout(file_row)
 
         scan_row = QHBoxLayout()
@@ -127,36 +134,29 @@ class LocalDatabaseEditorWidget(QWidget):
         scan_row.addWidget(scan_button)
         root.addLayout(scan_row)
 
-        splitter = QSplitter(Qt.Orientation.Horizontal)
-        splitter.setChildrenCollapsible(False)
-
-        left = QWidget()
-        left_layout = QVBoxLayout(left)
-        left_layout.setContentsMargins(0, 0, 0, 0)
-        left_layout.addWidget(QLabel("SQLite databases"))
-        self.database_list = QListWidget()
-        self.database_list.currentItemChanged.connect(self._database_item_changed)
-        left_layout.addWidget(self.database_list, 3)
-        left_layout.addWidget(QLabel("Tables and views"))
-        self.table_list = QListWidget()
-        self.table_list.currentItemChanged.connect(self._table_item_changed)
-        left_layout.addWidget(self.table_list, 2)
-        splitter.addWidget(left)
+        # Keep the internal database registry for discovery, but do not expose a
+        # permanent SQLite/Tables sidebar in the regular asset-browsing experience.
+        self.database_list = QListWidget(self)
+        self.database_list.hide()
 
         self.tabs = QTabWidget()
         self.tabs.setDocumentMode(True)
         self.asset_explorer = DatabaseAssetExplorer(self.tabs, config_manager=self.config_manager)
         self.tabs.addTab(self.asset_explorer, 'Asset Explorer')
-        splitter.addWidget(self.tabs)
-        splitter.setSizes([230, 950])
-        splitter.setStretchFactor(0, 0)
-        splitter.setStretchFactor(1, 1)
+
+        self.advanced_tabs = QTabWidget()
+        self.advanced_tabs.setDocumentMode(True)
 
         self.data_tab = QWidget()
         data_layout = QVBoxLayout(self.data_tab)
         data_toolbar = QHBoxLayout()
         self.table_title = QLabel("Choose a table")
         data_toolbar.addWidget(self.table_title, 1)
+        data_toolbar.addWidget(QLabel("Table:"))
+        self.table_combo = QComboBox()
+        self.table_combo.setMinimumWidth(180)
+        self.table_combo.currentIndexChanged.connect(self._table_combo_changed)
+        data_toolbar.addWidget(self.table_combo)
         data_toolbar.addWidget(QLabel("Rows/page:"))
         self.page_size = QComboBox()
         for size in self.PAGE_SIZES:
@@ -188,7 +188,7 @@ class LocalDatabaseEditorWidget(QWidget):
         self.edit_button.setCheckable(True)
         self.edit_button.toggled.connect(self._toggle_editing)
         data_layout.addWidget(self.edit_button)
-        self.tabs.addTab(self.data_tab, "Data")
+        self.advanced_tabs.addTab(self.data_tab, "Data")
 
         self.schema_tab = QWidget()
         schema_layout = QVBoxLayout(self.schema_tab)
@@ -205,7 +205,7 @@ class LocalDatabaseEditorWidget(QWidget):
         self.ddl_edit.setReadOnly(True)
         self.ddl_edit.setMaximumBlockCount(1000)
         schema_layout.addWidget(self.ddl_edit, 1)
-        self.tabs.addTab(self.schema_tab, "Schema")
+        self.advanced_tabs.addTab(self.schema_tab, "Schema")
 
         self.sql_tab = QWidget()
         sql_layout = QVBoxLayout(self.sql_tab)
@@ -233,9 +233,10 @@ class LocalDatabaseEditorWidget(QWidget):
         self.query_grid.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.query_grid.horizontalHeader().setStretchLastSection(True)
         sql_layout.addWidget(self.query_grid, 1)
-        self.tabs.addTab(self.sql_tab, "SQL (read-only)")
+        self.advanced_tabs.addTab(self.sql_tab, "SQL (read-only)")
+        self.tabs.addTab(self.advanced_tabs, "Advanced SQLite")
 
-        root.addWidget(splitter, 1)
+        root.addWidget(self.tabs, 1)
         footer = QHBoxLayout()
         self.status_label = QLabel("Read-only mode. No database has been opened.")
         self.status_label.setWordWrap(True)
@@ -314,20 +315,55 @@ class LocalDatabaseEditorWidget(QWidget):
             return
         self.status_label.setText("Scanning for SQLite database files…")
         databases = discover_databases(root)
-        self.database_list.blockSignals(True)
+        first_new_path: Path | None = None
         for path in databases:
             if not self._contains_database(path):
                 item = QListWidgetItem(str(path))
                 item.setToolTip(str(path))
                 item.setData(Qt.ItemDataRole.UserRole, str(path))
                 self.database_list.addItem(item)
-        self.database_list.blockSignals(False)
+                if first_new_path is None:
+                    first_new_path = path
+                self._sync_database_selector(path)
+        if first_new_path is not None and self.browser is None:
+            self._load_database(first_new_path)
         if databases:
             self.status_label.setText(f"Found {len(databases)} SQLite database(s) under {root}.")
         else:
             self.status_label.setText(
                 f"No standard SQLite database files were found under {root}."
             )
+
+    def _sync_database_selector(self, path: Path, *, select: bool = True) -> None:
+        try:
+            normalised = str(path.expanduser().resolve())
+        except OSError:
+            normalised = str(path.expanduser())
+        index = self.database_combo.findData(normalised)
+        self.database_combo.blockSignals(True)
+        if index < 0:
+            self.database_combo.addItem(path.name or normalised, normalised)
+            index = self.database_combo.count() - 1
+            self.database_combo.setItemToolTip(index, normalised)
+        if select:
+            self.database_combo.setCurrentIndex(index)
+        self.database_combo.blockSignals(False)
+
+    def _database_combo_changed(self, index: int) -> None:
+        path = self.database_combo.itemData(index)
+        if not path:
+            return
+        selected = Path(str(path))
+        if self.browser is None or self.browser.path != selected:
+            self._load_database(selected)
+
+    def _table_combo_changed(self, index: int) -> None:
+        data = self.table_combo.itemData(index)
+        if not data:
+            return
+        table_name, kind = data
+        if table_name:
+            self._load_table(str(table_name), str(kind))
 
     def _contains_database(self, path: Path) -> bool:
         expected = str(path.resolve())
@@ -342,26 +378,14 @@ class LocalDatabaseEditorWidget(QWidget):
             path = path.expanduser().resolve()
         except OSError:
             pass
-        if self._contains_database(path):
-            for index in range(self.database_list.count()):
-                item = self.database_list.item(index)
-                if item.data(Qt.ItemDataRole.UserRole) == str(path):
-                    self.database_list.setCurrentItem(item)
-                    break
-        else:
+        if not self._contains_database(path):
             item = QListWidgetItem(str(path))
             item.setToolTip(str(path))
             item.setData(Qt.ItemDataRole.UserRole, str(path))
             self.database_list.addItem(item)
-            self.database_list.setCurrentItem(item)
+        self._sync_database_selector(path)
         if open_now:
             self._load_database(path)
-
-    def _database_item_changed(
-        self, current: QListWidgetItem | None, _previous: QListWidgetItem | None
-    ) -> None:
-        if current is not None:
-            self._load_database(Path(str(current.data(Qt.ItemDataRole.UserRole))))
 
     def _load_database(self, path: Path) -> None:
         try:
@@ -369,25 +393,27 @@ class LocalDatabaseEditorWidget(QWidget):
             tables = browser.tables()
         except SQLiteBrowserError as exc:
             self.browser = None
-            self.table_list.clear()
+            self.table_combo.clear()
             self.data_grid.clear()
             self.data_grid.setRowCount(0)
             self.data_grid.setColumnCount(0)
             self.path_edit.setText(str(path))
             self.status_label.setText(str(exc))
             return
+
         self.browser = browser
         self.path_edit.setText(str(browser.path))
-        self.table_list.blockSignals(True)
-        self.table_list.clear()
+        self._sync_database_selector(browser.path)
+        self.table_combo.blockSignals(True)
+        self.table_combo.clear()
         for table in tables:
-            item = QListWidgetItem(f"{table.name}  [{table.kind}]")
-            item.setData(Qt.ItemDataRole.UserRole, table.name)
-            item.setData(Qt.ItemDataRole.UserRole + 1, table.kind)
-            item.setToolTip(table.sql or table.name)
-            self.table_list.addItem(item)
-        self.table_list.blockSignals(False)
+            self.table_combo.addItem(
+                f"{table.name}  [{table.kind}]",
+                (table.name, table.kind),
+            )
+        self.table_combo.blockSignals(False)
         asset_database_supported = self.asset_explorer.set_database(browser.path)
+
         if tables:
             preferred_index = next(
                 (
@@ -396,30 +422,27 @@ class LocalDatabaseEditorWidget(QWidget):
                 ),
                 0,
             )
-            self.table_list.setCurrentRow(preferred_index)
-            self._load_table(tables[preferred_index].name, tables[preferred_index].kind)
+            self.table_combo.setCurrentIndex(preferred_index)
+            preferred_table = tables[preferred_index]
+            self._load_table(preferred_table.name, preferred_table.kind)
             self.tabs.setCurrentWidget(
-                self.asset_explorer if asset_database_supported else self.data_tab
+                self.asset_explorer if asset_database_supported else self.advanced_tabs
             )
+            if not asset_database_supported:
+                self.advanced_tabs.setCurrentWidget(self.data_tab)
         else:
             self.current_table = ""
             self.data_grid.clear()
             self.data_grid.setRowCount(0)
             self.data_grid.setColumnCount(0)
+            self.table_combo.clear()
             self.status_label.setText(f"Opened {browser.path}; no tables or views found.")
-            self.tabs.setCurrentWidget(self.data_tab)
+            self.tabs.setCurrentWidget(self.advanced_tabs)
+            self.advanced_tabs.setCurrentWidget(self.data_tab)
+
         self.status_label.setText(
             f"Opened read-only: {browser.path} — {len(tables)} table(s)/view(s)."
         )
-
-    def _table_item_changed(
-        self, current: QListWidgetItem | None, _previous: QListWidgetItem | None
-    ) -> None:
-        if current is not None:
-            self._load_table(
-                str(current.data(Qt.ItemDataRole.UserRole)),
-                str(current.data(Qt.ItemDataRole.UserRole + 1)),
-            )
 
     def _load_table(self, table: str, kind: str | None = None) -> None:
         if self.browser is None:

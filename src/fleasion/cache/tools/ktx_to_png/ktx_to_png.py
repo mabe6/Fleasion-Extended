@@ -84,6 +84,76 @@ def strip_prefixed_ktx(data: bytes) -> bytes | None:
     return None
 
 
+def inspect_texture_metadata(data: bytes) -> dict[str, int | str] | None:
+    """Read KTX dimensions, array layers, cube faces and mip levels without decoding pixels."""
+    payload = strip_prefixed_ktx(data) or data
+    if payload[:12] == KTX2_MAGIC:
+        if len(payload) < 80:
+            return None
+        try:
+            (
+                vk_format,
+                type_size,
+                width,
+                height,
+                depth,
+                layers,
+                faces,
+                levels,
+                supercompression,
+            ) = struct.unpack_from('<9I', payload, 12)
+        except struct.error:
+            return None
+        if not width or not height:
+            return None
+        return {
+            'container': 'KTX2',
+            'width': width,
+            'height': height,
+            'depth': depth or 1,
+            'layers': layers or 1,
+            'faces': faces or 1,
+            'mip_levels': levels or 1,
+            'format': f'Vulkan format {vk_format}',
+            'type_size': type_size,
+            'supercompression': supercompression,
+        }
+
+    if payload[:12] == KTX1_MAGIC:
+        if len(payload) < 64:
+            return None
+        marker = struct.unpack_from('<I', payload, 12)[0]
+        endian = '<' if marker == 0x04030201 else '>' if marker == 0x01020304 else ''
+        if not endian:
+            return None
+        try:
+            gl_type, gl_type_size, gl_format, internal_format, _base_format = struct.unpack_from(
+                f'{endian}5I', payload, 16
+            )
+            width, height, depth, layers, faces, levels, key_value_bytes = struct.unpack_from(
+                f'{endian}7I', payload, 36
+            )
+        except struct.error:
+            return None
+        if not width or not height:
+            return None
+        return {
+            'container': 'KTX1',
+            'width': width,
+            'height': height,
+            'depth': depth or 1,
+            'layers': layers or 1,
+            'faces': faces or 1,
+            'mip_levels': levels or 1,
+            'format': f'GL format 0x{internal_format:04X}',
+            'type': gl_type,
+            'type_size': gl_type_size,
+            'pixel_format': gl_format,
+            'key_value_bytes': key_value_bytes,
+        }
+    return None
+
+
 # KTX1 -- header parsing + ETC/EAC dispatch
 # GL internal format constants (from KTX1/Main.cs KtxTextureFormat enum)
 _GL_RGB8_ETC1 = 0x8D64

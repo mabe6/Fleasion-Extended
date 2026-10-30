@@ -130,9 +130,96 @@ def decompress_roblox_payload_file(
         raise RobloxCacheError(f'Could not stream-decompress cache payload: {exc}') from exc
 
 
-def detect_roblox_cache_payload_kind(payload: bytes) -> str:
+def parse_cached_http_response(payload: bytes) -> tuple[dict[str, str], bytes] | None:
+    """Parse response headers embedded in a cache payload, if the bytes are a header block."""
+    sample = payload[:65536]
+    separator = sample.find(b'\r\n\r\n')
+    separator_size = 4
+    if separator < 0:
+        separator = sample.find(b'\n\n')
+        separator_size = 2
+    header_bytes = sample if separator < 0 else sample[:separator]
+    body_start = len(header_bytes) if separator < 0 else separator + separator_size
+    headers: dict[str, str] = {}
+    for raw_line in header_bytes.splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith((b'HTTP/1.', b'HTTP/2', b'HTTP/3')):
+            continue
+        if b':' not in line:
+            continue
+        raw_key, raw_value = line.split(b':', 1)
+        try:
+            key = raw_key.decode('ascii').strip().casefold()
+            value = raw_value.decode('latin-1').strip()
+        except UnicodeDecodeError:
+            continue
+        if not key or len(key) > 80 or not re.fullmatch(r'[a-z0-9-]+', key):
+            continue
+        headers[key] = value
+
+    recognised = {
+        'content-type', 'content-encoding', 'content-length', 'cache-control',
+        'access-control-allow-methods', 'access-control-allow-origin',
+        'access-control-expose-headers', 'server', 'last-modified',
+        'x-rbx-zstd-dict-sha', 'roblox-assettypeid',
+    }
+    if len(set(headers).intersection(recognised)) < 2:
+        return None
+    body = b'' if separator < 0 else payload[body_start:]
+    return headers, body
+
+
+def format_cached_http_response_preview(payload: bytes, url: str = '') -> str:
+    """Render safe response metadata without treating HTTP headers as asset bytes."""
+    parsed = parse_cached_http_response(payload)
+    if parsed is None:
+        if url.casefold().split('?', 1)[0].endswith('.dcz'):
+            return (
+                'Roblox client settings resource (DCZ)\n'
+                f'URL: {url}\n'
+                f'Cached bytes: {len(payload):,}\n\n'
+                'No embedded HTTP response headers were found. DCZ content may use a Roblox '
+                'Zstandard dictionary; the payload is preserved, not guessed or decoded without '
+                'the matching dictionary.'
+            )
+        return payload[:20000].decode('utf-8', errors='replace') or 'Empty response metadata.'
+    headers, body = parsed
+    lines = [
+        'Cached Roblox HTTP response',
+        f'URL: {url or "not stored"}',
+    ]
+    display_headers = (
+        ('content-type', 'Content type'),
+        ('content-encoding', 'Content encoding'),
+        ('content-length', 'Original response size'),
+        ('last-modified', 'Last modified'),
+        ('cache-control', 'Cache control'),
+        ('server', 'Server'),
+        ('x-rbx-zstd-dict-sha', 'Zstandard dictionary SHA-256'),
+        ('roblox-assettypeid', 'Roblox asset type ID'),
+        ('roblox-assetversionnumber', 'Asset version'),
+    )
+    for key, label in display_headers:
+        if headers.get(key):
+            lines.append(f'{label}: {headers[key]}')
+    if body:
+        body_kind = detect_roblox_payload_kind(body, url=url)
+        lines.extend(('', f'Response body: {len(body):,} bytes · {body_kind}'))
+        if body.lstrip().startswith(b'#EXTM3U'):
+            lines.append(body[:20000].decode('utf-8', errors='replace'))
+        elif 'dcz' in headers.get('content-encoding', '').casefold():
+            lines.append(
+                'The body uses Roblox DCZ/Zstandard dictionary compression. '
+                'The dictionary hash is shown above; the raw cached bytes are preserved.'
+            )
+    else:
+        lines.extend(('', 'No response body is present in this cached header record.'))
+    return '\n'.join(lines)
+
+
+def detect_roblox_cache_payload_kind(payload: bytes, *, url: str = '') -> str:
     """Detect a cached payload's inner format while keeping its stored bytes unchanged."""
-    return detect_roblox_payload_kind(decompress_roblox_payload_prefix(payload))
+    return detect_roblox_payload_kind(decompress_roblox_payload_prefix(payload), url=url)
 
 
 @dataclass(frozen=True)
@@ -223,8 +310,33 @@ def split_rbxh_entry(data: bytes) -> tuple[str, bytes, bool]:
         return '', data, False
 
 
-def detect_roblox_payload_kind(payload: bytes) -> str:
-    """Detect common Roblox cache payload formats without decoding their contents."""
+def detect_roblox_payload_kind(payload: bytes, *, url: str = '') -> str:
+    """Detect cache payload formats, including non-asset Roblox HTTP resources."""
+    lower_url = url.casefold()
+    lower_path = lower_url.split('?', 1)[0]
+    if lower_path.endswith('.m3u8'):
+        if payload.lstrip().startswith(b'#EXTM3U'):
+            return 'video-manifest'
+        if re.search(rb'(?im)^\s*roblox-assettypeid\s*:\s*86\s*$', payload[:4096]):
+            return 'video-metadata'
+    if lower_path.endswith('.dcz') or 'settings-compressed/' in lower_path:
+        return 'roblox-settings'
+
+    response = parse_cached_http_response(payload)
+    if response is not None:
+        headers, body = response
+        encoding = headers.get('content-encoding', '').casefold()
+        content_type = headers.get('content-type', '').casefold()
+        if 'dcz' in encoding:
+            return 'roblox-settings' if (
+                lower_path.endswith('.dcz') or 'settings-compressed/' in lower_path
+            ) else 'http-response'
+        if 'mpegurl' in content_type or body.lstrip().startswith(b'#EXTM3U'):
+            return 'video-manifest'
+        return 'http-response'
+
+    if payload.lstrip().startswith(b'#EXTM3U'):
+        return 'video-manifest'
     if re.search(rb'(?im)^\s*roblox-assettypeid\s*:\s*\d+\s*$', payload[:4096]):
         return 'asset-metadata'
     if payload.startswith((b'\x00\x01\x00\x00', b'OTTO', b'ttcf', b'wOFF', b'wOF2')):
@@ -654,7 +766,7 @@ class RobloxCacheStore:
                 kind = 'compressed'
                 name = ''
             else:
-                kind = detect_roblox_payload_kind(payload)
+                kind = detect_roblox_payload_kind(payload, url=url)
                 name = _embedded_name(payload)
 
             results.append(RobloxCacheEntry(

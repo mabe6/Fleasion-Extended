@@ -222,3 +222,124 @@ finally:
     env = os.environ.copy()
     env['QT_QPA_PLATFORM'] = 'offscreen'
     subprocess.run([sys.executable, '-c', code], check=True, env=env)
+
+
+
+def test_detect_kind_recognises_roblox_settings_and_video_resources() -> None:
+    from fleasion.database.roblox_cache_store import detect_roblox_payload_kind
+
+    settings_url = (
+        'https://clientsettingscdn.roblox.com/v2/settings-compressed/'
+        'application/PCDesktopClient/abcdef.dcz'
+    )
+    hls_url = 'https://sc5.rbxcdn.com/c/hash/hash/main.m3u8?token=abc'
+    assert detect_roblox_payload_kind(
+        b'content-encoding: dcz\r\n', url=settings_url
+    ) == 'roblox-settings'
+    assert detect_roblox_payload_kind(
+        b'#EXTM3U\n#EXTINF:4,\nsegment.ts', url=hls_url
+    ) == 'video-manifest'
+    assert detect_roblox_payload_kind(
+        b'roblox-assettypeid: 86\r\n', url=hls_url
+    ) == 'video-metadata'
+    assert _kind_group('video-manifest') == 'Video'
+    assert _kind_group('roblox-settings') == 'Settings'
+
+
+def test_ktx_texture_metadata_exposes_layers_faces_and_mip_levels() -> None:
+    from fleasion.cache.tools.ktx_to_png.ktx_to_png import (
+        KTX1_MAGIC,
+        KTX2_MAGIC,
+        inspect_texture_metadata,
+    )
+
+    ktx2_header = struct.pack(
+        '<9I', 37, 1, 128, 64, 0, 4, 6, 5, 0
+    ) + bytes(32)
+    metadata2 = inspect_texture_metadata(KTX2_MAGIC + ktx2_header)
+    assert metadata2 is not None
+    assert metadata2['container'] == 'KTX2'
+    assert metadata2['width'] == 128
+    assert metadata2['height'] == 64
+    assert metadata2['layers'] == 4
+    assert metadata2['faces'] == 6
+    assert metadata2['mip_levels'] == 5
+
+    ktx1_header = struct.pack(
+        '<13I',
+        0x04030201, 0, 1, 0, 0x83F1, 0x1908,
+        256, 128, 0, 3, 6, 8, 0,
+    )
+    metadata1 = inspect_texture_metadata(KTX1_MAGIC + ktx1_header)
+    assert metadata1 is not None
+    assert metadata1['container'] == 'KTX1'
+    assert metadata1['layers'] == 3
+    assert metadata1['faces'] == 6
+    assert metadata1['mip_levels'] == 8
+
+
+def test_rbxm_preview_lists_animation_names_and_folders() -> None:
+    code = r"""
+from PyQt6.QtWidgets import QApplication
+from fleasion.cache.rbxm_preview import RbxmPreviewWidget
+
+app = QApplication([])
+xml = b'''<roblox version="4">
+  <Item class="Folder" referent="RBX0">
+    <Properties><string name="Name">Animations</string></Properties>
+    <Item class="KeyframeSequence" referent="RBX1">
+      <Properties><string name="Name">Wave</string></Properties>
+    </Item>
+    <Item class="Folder" referent="RBX2">
+      <Properties><string name="Name">Movement</string></Properties>
+      <Item class="KeyframeSequence" referent="RBX3">
+        <Properties><string name="Name">Run</string></Properties>
+      </Item>
+    </Item>
+  </Item>
+</roblox>'''
+widget = RbxmPreviewWidget()
+widget.load_bytes(xml, 'test')
+assert widget.animation_names() == ['Animations', 'Wave', 'Movement', 'Run']
+widget.close()
+app.processEvents()
+"""
+    env = os.environ.copy()
+    env['QT_QPA_PLATFORM'] = 'offscreen'
+    subprocess.run([sys.executable, '-c', code], check=True, env=env)
+
+
+def test_asset_database_mesh_preview_creates_obj_viewer(monkeypatch) -> None:
+    import sys
+    from types import SimpleNamespace
+    from PyQt6.QtWidgets import QApplication, QWidget
+
+    from fleasion.gui import database_asset_explorer as explorer_module
+
+    app = QApplication.instance() or QApplication([])
+
+    class FakeObjViewerPanel(QWidget):
+        def __init__(self, parent=None, config_manager=None):
+            super().__init__(parent)
+            self.obj_text = ''
+
+        def load_obj(self, obj_text, label):
+            self.obj_text = obj_text
+            self.label = label
+
+    monkeypatch.setitem(
+        sys.modules,
+        'fleasion.cache.obj_viewer',
+        SimpleNamespace(ObjViewerPanel=FakeObjViewerPanel),
+    )
+    widget = explorer_module.DatabaseAssetExplorer()
+    try:
+        request_id = 'ab' * 16
+        widget._current_request_id = request_id
+        widget._on_mesh_ready(request_id, 'v 0 0 0\nf 1 1 1')
+        assert isinstance(widget._mesh_panel, FakeObjViewerPanel)
+        assert widget._mesh_panel.obj_text.startswith('v 0 0 0')
+        assert widget.preview_stack.currentWidget() is widget.mesh_panel
+    finally:
+        widget.close()
+        app.processEvents()

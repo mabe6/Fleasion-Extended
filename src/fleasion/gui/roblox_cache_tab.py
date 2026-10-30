@@ -43,6 +43,7 @@ from ..database.roblox_cache_store import (
     detect_roblox_cache_payload_kind,
     detect_roblox_payload_kind,
     decompress_roblox_payload_file,
+    format_cached_http_response_preview,
     split_rbxh_entry,
 )
 from ..utils import log_buffer
@@ -126,7 +127,7 @@ class _CacheEntryPreviewWorker(QThread):
             with tempfile.TemporaryDirectory(prefix='fleasion-cache-preview-') as folder:
                 raw_path = Path(folder) / 'payload.raw'
                 decoded_path = Path(folder) / 'payload.decoded'
-                self.store.copy_entry_payload_to_file(self.entry_id, raw_path)
+                source_url, _raw_size = self.store.copy_entry_payload_to_file(self.entry_id, raw_path)
                 if self.isInterruptionRequested():
                     return
                 decompress_roblox_payload_file(raw_path, decoded_path)
@@ -134,7 +135,7 @@ class _CacheEntryPreviewWorker(QThread):
                     return
                 with decoded_path.open('rb') as handle:
                     prefix = handle.read(8192)
-                kind = detect_roblox_payload_kind(prefix)
+                kind = detect_roblox_payload_kind(prefix, url=source_url)
                 payload = decoded_path.read_bytes()
                 if kind == 'mesh':
                     from ..cache.mesh_processing import is_mesh_data
@@ -179,6 +180,8 @@ class RobloxCacheTab(QWidget):
         self._entries_page_offset = 0
         self._image_loader = None
         self._mesh_loader = None
+        self._decoder_workers: set[QThread] = set()
+        self._preview_stopped = False
         self._current_preview_image: QImage | None = None
         self._current_preview_request_id = ''
         self._preview_workers: set[_CacheEntryPreviewWorker] = set()
@@ -196,6 +199,10 @@ class RobloxCacheTab(QWidget):
         self._mesh_panel = None
         self._model_panel = None
         self._animation_panel = None
+        self._audio_panel = None
+        self._audio_player = None
+        self._audio_preview_path: Path | None = None
+        self._font_panel = None
         settings = getattr(config_manager, 'settings', {})
         self._probe_header_enabled = bool(
             settings.get('show_cache_probe_header', False)
@@ -378,6 +385,24 @@ class RobloxCacheTab(QWidget):
             ('Fonts', 'font'),
             ('JSON', 'json'),
             ('Asset metadata', 'asset-metadata'),
+            ('Roblox settings (DCZ)', 'roblox-settings'),
+            ('Video metadata', 'video-metadata'),
+            ('HLS video playlist', 'video-manifest'),
+            ('HTTP response headers', 'http-response'),
+            ('PNG', 'png'),
+            ('JPEG', 'jpg'),
+            ('BMP', 'bmp'),
+            ('GIF', 'gif'),
+            ('WebP', 'webp'),
+            ('TIFF', 'tiff'),
+            ('ICO', 'ico'),
+            ('DDS', 'dds'),
+            ('PSD', 'psd'),
+            ('RBXM', 'rbxm'),
+            ('XML', 'xml'),
+            ('Curve animation', 'curve-anim'),
+            ('OGG', 'ogg'),
+            ('MP3', 'mp3'),
             ('Other', 'other'),
         ):
             self.kind_filter_combo.addItem(label, value)
@@ -413,6 +438,7 @@ class RobloxCacheTab(QWidget):
         self.table.horizontalHeader().setStretchLastSection(True)
         self.table.itemDoubleClicked.connect(self._set_selected_as_target)
         self.table.itemSelectionChanged.connect(self._selection_changed)
+        self.table.itemClicked.connect(self._cache_entry_clicked)
 
         self.entries_splitter = QSplitter(Qt.Orientation.Horizontal)
         self.entries_splitter.setChildrenCollapsible(False)
@@ -427,9 +453,16 @@ class RobloxCacheTab(QWidget):
         preview_layout.setContentsMargins(8, 4, 4, 4)
         preview_layout.setSpacing(5)
 
+        preview_title_row = QHBoxLayout()
         self.preview_title = QLabel('Cache Slot Preview')
         self.preview_title.setStyleSheet('font-weight: 600;')
-        preview_layout.addWidget(self.preview_title)
+        preview_title_row.addWidget(self.preview_title, 1)
+        self.stop_preview_button = QPushButton('Stop preview')
+        self.stop_preview_button.setToolTip('Stop decoding the selected cache slot')
+        self.stop_preview_button.setVisible(False)
+        self.stop_preview_button.clicked.connect(self._stop_preview)
+        preview_title_row.addWidget(self.stop_preview_button)
+        preview_layout.addLayout(preview_title_row)
 
         self.preview_details = QLabel('Select a cache slot to preview its contents.')
         self.preview_details.setWordWrap(True)
@@ -483,10 +516,10 @@ class RobloxCacheTab(QWidget):
         entries_layout.addLayout(paging_row)
 
         inventory_actions = QHBoxLayout()
-        set_target = QPushButton('Selected → target ID')
+        set_target = QPushButton('Copy to target ID')
         set_target.clicked.connect(self._set_selected_as_target)
         inventory_actions.addWidget(set_target)
-        set_source = QPushButton('Selected → replacement ID')
+        set_source = QPushButton('Copy to replacement ID')
         set_source.clicked.connect(self._set_selected_as_source)
         inventory_actions.addWidget(set_source)
         import_button = QPushButton('Import File → Target…')
@@ -702,11 +735,20 @@ class RobloxCacheTab(QWidget):
                 continue
             if kind_filter == 'json' and entry.kind != 'json':
                 continue
-            if kind_filter == 'asset-metadata' and entry.kind != 'asset-metadata':
+            exact_kinds = {
+                'png', 'jpg', 'bmp', 'gif', 'webp', 'tiff', 'ico', 'dds', 'ktx', 'psd',
+                'mesh', 'rbxm', 'xml', 'anim', 'curve-anim', 'ogg', 'mp3', 'font',
+                'asset-metadata', 'roblox-settings', 'video-metadata', 'video-manifest',
+                'http-response',
+            }
+            if kind_filter in exact_kinds and entry.kind != kind_filter:
                 continue
             if kind_filter == 'other' and entry.kind in (
                 image_kinds | model_kinds | animation_kinds | audio_kinds
-                | {'font', 'json', 'mesh', 'asset-metadata'}
+                | {
+                    'font', 'json', 'mesh', 'asset-metadata', 'roblox-settings',
+                    'video-metadata', 'video-manifest', 'http-response',
+                }
             ):
                 continue
 
@@ -791,19 +833,38 @@ class RobloxCacheTab(QWidget):
         entry_id = self._selected_entry_id()
         if not entry_id:
             self.asset_lookup_button.setEnabled(False)
+            self.stop_preview_button.setVisible(False)
+            self._preview_stopped = False
             self._reset_slot_preview()
             return
         entry = self.entries_by_id.get(entry_id)
         if entry is None:
             self.asset_lookup_button.setEnabled(False)
+            self.stop_preview_button.setVisible(False)
+            self._preview_stopped = False
             self._reset_slot_preview()
             return
         self.asset_lookup_button.setEnabled(True)
+        self.stop_preview_button.setVisible(True)
+        self._preview_stopped = False
         display_name = self._entry_name(entry)
         cached = self._cache_metadata.get(entry_id, {})
         self.preview_title.setText(display_name or f'{entry.kind.upper()} · {entry.entry_id[:12]}')
+        asset_id = entry.asset_id or cached.get('asset_id')
+        if asset_id:
+            asset_id_text = str(asset_id)
+        elif entry.kind == 'roblox-settings':
+            asset_id_text = 'not applicable (client settings resource)'
+        elif entry.kind in {'video-metadata', 'video-manifest'}:
+            asset_id_text = 'not applicable (video resource)'
+        elif entry.kind == 'http-response':
+            asset_id_text = 'not applicable (cached HTTP response)'
+        elif entry.kind == 'asset-metadata':
+            asset_id_text = 'not included in the type marker'
+        else:
+            asset_id_text = 'not embedded in cache metadata'
         details = [
-            f'Asset ID: {entry.asset_id or cached.get("asset_id") or "not found"}',
+            f'Asset ID: {asset_id_text}',
             f'Type: {entry.kind}',
             f'Name: {display_name or cached.get("name") or "not stored in local metadata"}',
             f'File/content size: {_format_size(entry.file_size)}',
@@ -824,6 +885,42 @@ class RobloxCacheTab(QWidget):
         self.preview_details.setText('\n'.join(details))
         self._load_slot_preview(entry)
 
+    def _cache_entry_clicked(self, item) -> None:
+        """Reopen a preview when the user clicks the same selected row after stopping it."""
+        del item
+        if not self._preview_stopped:
+            return
+        entry_id = self._selected_entry_id()
+        entry = self.entries_by_id.get(entry_id)
+        if entry is None:
+            return
+        self._preview_stopped = False
+        self.stop_preview_button.setVisible(True)
+        self._load_slot_preview(entry)
+
+    def _stop_preview(self) -> None:
+        """Hide the stop control and cancel outstanding preview work without blocking the UI."""
+        self._preview_stopped = True
+        self.stop_preview_button.setVisible(False)
+        self._current_preview_request_id = ''
+        self._reset_slot_preview()
+        self.preview_info.setText('Preview stopped. Click the selected cache entry again to reopen it.')
+        self.preview_stack.setCurrentWidget(self.preview_info)
+
+    def _track_decoder_worker(self, attribute: str, worker: QThread) -> None:
+        setattr(self, attribute, worker)
+        self._decoder_workers.add(worker)
+        worker.finished.connect(
+            lambda current=worker, attr=attribute: self._decoder_worker_finished(attr, current)
+        )
+        worker.finished.connect(worker.deleteLater)
+        worker.start()
+
+    def _decoder_worker_finished(self, attribute: str, worker: QThread) -> None:
+        self._decoder_workers.discard(worker)
+        if getattr(self, attribute, None) is worker:
+            setattr(self, attribute, None)
+
     def _stop_slot_worker(self, attribute: str) -> None:
         worker = getattr(self, attribute, None)
         if worker is None:
@@ -832,15 +929,16 @@ class RobloxCacheTab(QWidget):
             stop = getattr(worker, 'stop', None)
             if callable(stop):
                 stop()
-            worker.quit()
-            worker.wait()
-            worker.deleteLater()
+            worker.requestInterruption()
         except RuntimeError:
             pass
         setattr(self, attribute, None)
 
+
     def _reset_slot_preview(self) -> None:
         self._current_preview_request_id = ''
+        for worker in tuple(self._preview_workers):
+            worker.requestInterruption()
         self._stop_slot_worker('_image_loader')
         self._stop_slot_worker('_mesh_loader')
         if self._animation_panel is not None:
@@ -861,6 +959,33 @@ class RobloxCacheTab(QWidget):
                 self._mesh_panel.hide()
             except Exception:
                 pass
+        if self._audio_player is not None:
+            try:
+                self._audio_player.stop()
+                self._audio_player.deleteLater()
+            except Exception:
+                pass
+            self._audio_player = None
+        if self._audio_panel is not None:
+            try:
+                self._audio_panel.hide()
+                self._audio_panel.deleteLater()
+            except Exception:
+                pass
+            self._audio_panel = None
+        if self._audio_preview_path is not None:
+            try:
+                self._audio_preview_path.unlink(missing_ok=True)
+            except OSError:
+                pass
+            self._audio_preview_path = None
+        if self._font_panel is not None:
+            try:
+                self._font_panel.hide()
+                self._font_panel.deleteLater()
+            except Exception:
+                pass
+            self._font_panel = None
         self.preview_image.clear()
         self.preview_text.clear()
         self._current_preview_image = None
@@ -887,49 +1012,112 @@ class RobloxCacheTab(QWidget):
         entry = self.entries_by_id.get(request_id)
         if entry is None:
             return
-        if entry.kind == 'compressed':
+        if entry.kind in {'compressed', 'other'} and kind != 'other':
+            old_kind = entry.kind
             entry.kind = kind
             self.preview_title.setText(f'{kind.upper()} · {entry.entry_id[:12]}')
             self.preview_details.setText(
-                self.preview_details.text().replace('Type: compressed', f'Type: {kind}')
+                self.preview_details.text().replace(f'Type: {old_kind}', f'Type: {kind}')
             )
+            if not entry.asset_id and kind == 'roblox-settings':
+                self.preview_details.setText(
+                    self.preview_details.text().replace(
+                        'Asset ID: not embedded in cache metadata',
+                        'Asset ID: not applicable (client settings resource)',
+                    )
+                )
+            elif not entry.asset_id and kind in {'video-metadata', 'video-manifest'}:
+                self.preview_details.setText(
+                    self.preview_details.text().replace(
+                        'Asset ID: not embedded in cache metadata',
+                        'Asset ID: not applicable (video resource)',
+                    )
+                )
+            self._render_entries()
         try:
             if kind in _IMAGE_KINDS:
+                if kind == 'ktx':
+                    from ..cache.tools.ktx_to_png.ktx_to_png import inspect_texture_metadata
+
+                    texture = inspect_texture_metadata(payload)
+                    if texture:
+                        texture_lines = [
+                            f'Texture: {texture["container"]} · {texture["width"]}×{texture["height"]}',
+                            f'Layers: {texture["layers"]} · Faces: {texture["faces"]} · Mip levels: {texture["mip_levels"]}',
+                            f'Format: {texture["format"]}',
+                            'Preview displays the base mip level and first layer/face.',
+                        ]
+                        self.preview_details.setText(
+                            self.preview_details.text() + '\n' + '\n'.join(texture_lines)
+                        )
                 from ..cache.cache_viewer import ImageLoaderThread
 
                 self.preview_info.setText('Decoding image / KTX texture…')
-                self._image_loader = ImageLoaderThread(payload)
-                self._image_loader.image_ready.connect(
+                image_loader = ImageLoaderThread(payload)
+                image_loader.image_ready.connect(
                     lambda rgba, width, height, request_id=entry.entry_id:
                     self._on_slot_image_ready(request_id, rgba, width, height)
                 )
-                self._image_loader.error.connect(
+                image_loader.error.connect(
                     lambda error, request_id=entry.entry_id:
                     self._on_slot_preview_error(request_id, error)
                 )
                 self.preview_stack.setCurrentWidget(self.preview_info)
-                self._image_loader.start()
+                self._track_decoder_worker('_image_loader', image_loader)
             elif kind == 'mesh':
                 from ..cache.cache_viewer import MeshLoaderThread
 
                 self.preview_info.setText('Preparing 3D mesh preview…')
-                self._mesh_loader = MeshLoaderThread(
+                mesh_loader = MeshLoaderThread(
                     payload,
                     entry.asset_id or entry.entry_id[:12],
                 )
-                self._mesh_loader.mesh_ready.connect(
+                mesh_loader.mesh_ready.connect(
                     lambda obj_text, request_id=entry.entry_id:
                     self._on_slot_mesh_ready(request_id, obj_text)
                 )
-                self._mesh_loader.error.connect(
+                mesh_loader.error.connect(
                     lambda error, request_id=entry.entry_id:
                     self._on_slot_preview_error(request_id, error)
                 )
                 self.preview_stack.setCurrentWidget(self.preview_info)
-                self._mesh_loader.start()
+                self._track_decoder_worker('_mesh_loader', mesh_loader)
             elif kind == 'asset-metadata':
                 self.preview_text.setPlainText(payload.decode('ascii', errors='replace').strip())
                 self.preview_stack.setCurrentWidget(self.preview_text)
+            elif kind in {'roblox-settings', 'video-metadata', 'video-manifest', 'http-response'}:
+                self.preview_text.setPlainText(
+                    format_cached_http_response_preview(payload, entry.url)
+                    if kind != 'video-manifest' or not payload.lstrip().startswith(b'#EXTM3U')
+                    else payload[:20000].decode('utf-8', errors='replace')
+                )
+                self.preview_stack.setCurrentWidget(self.preview_text)
+            elif kind in {'ogg', 'mp3'}:
+                from ..cache.audio_player import AudioPlayerWidget
+
+                audio_dir = Path(tempfile.gettempdir()) / 'fleasion_local_db_audio'
+                audio_dir.mkdir(parents=True, exist_ok=True)
+                extension = '.ogg' if kind == 'ogg' else '.mp3'
+                self._audio_preview_path = audio_dir / f'{entry.entry_id}{extension}'
+                self._audio_preview_path.write_bytes(payload)
+                self._audio_panel = QWidget(self.preview_stack)
+                audio_layout = QVBoxLayout(self._audio_panel)
+                audio_layout.setContentsMargins(4, 4, 4, 4)
+                self._audio_player = AudioPlayerWidget(
+                    str(self._audio_preview_path), self._audio_panel, self.config_manager
+                )
+                audio_layout.addWidget(self._audio_player)
+                self.preview_stack.addWidget(self._audio_panel)
+                self.preview_stack.setCurrentWidget(self._audio_panel)
+            elif kind == 'font':
+                from ..cache.font_viewer import FontViewerWidget
+
+                self._font_panel = QWidget(self.preview_stack)
+                font_layout = QVBoxLayout(self._font_panel)
+                font_layout.setContentsMargins(4, 4, 4, 4)
+                font_layout.addWidget(FontViewerWidget(payload, self._font_panel))
+                self.preview_stack.addWidget(self._font_panel)
+                self.preview_stack.setCurrentWidget(self._font_panel)
             elif kind in {'anim', 'curve-anim'}:
                 from ..cache.animation_viewer import AnimationViewerPanel
 
@@ -964,6 +1152,28 @@ class RobloxCacheTab(QWidget):
                     self._model_panel.add_property_btn.setEnabled(False)
                     self.preview_stack.addWidget(self._model_panel)
                 self._model_panel.load_bytes(payload, entry.asset_id or entry.entry_id[:12])
+                model_name = (
+                    self._model_panel.document.roots[0].name
+                    if self._model_panel.document and self._model_panel.document.roots
+                    else ''
+                )
+                animation_names = self._model_panel.animation_names()
+                extra_lines = []
+                if animation_names:
+                    extra_lines.append('Animations in model: ' + ', '.join(animation_names[:30]))
+                if model_name:
+                    extra_lines.append('Model root: ' + model_name)
+                if extra_lines:
+                    self.preview_details.setText(
+                        self.preview_details.text() + '\n' + '\n'.join(extra_lines)
+                    )
+                if model_name or animation_names:
+                    metadata = {}
+                    if model_name:
+                        metadata['name'] = model_name
+                    if animation_names:
+                        metadata['contained_animations'] = ' | '.join(animation_names)
+                    self._save_cache_metadata(entry.entry_id, metadata)
                 self.preview_stack.setCurrentWidget(self._model_panel)
             elif kind == 'json' or payload.lstrip().startswith((b'{', b'[')):
                 try:
@@ -1341,12 +1551,26 @@ class RobloxCacheTab(QWidget):
             scan_worker.wait()
         self._scan_worker = None
         self._stop_name_resolver()
-        workers = tuple(self._preview_workers)
-        for worker in workers:
+
+        preview_workers = tuple(self._preview_workers)
+        for worker in preview_workers:
             worker.requestInterruption()
-        for worker in workers:
+        for worker in preview_workers:
             worker.wait()
         self._preview_workers.clear()
+
+        decoder_workers = tuple(self._decoder_workers)
+        for worker in decoder_workers:
+            try:
+                stop = getattr(worker, 'stop', None)
+                if callable(stop):
+                    stop()
+                worker.requestInterruption()
+            except RuntimeError:
+                pass
+        for worker in decoder_workers:
+            worker.wait()
+        self._decoder_workers.clear()
 
     def _stop_name_resolver(self) -> None:
         worker = self._name_resolver
