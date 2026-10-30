@@ -7,6 +7,7 @@ from types import SimpleNamespace
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
+from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import QApplication
 
 from fleasion.gui import roblox_cache_tab as cache_tab_module
@@ -86,6 +87,128 @@ def test_local_db_opens_on_active_swaps_with_pasteable_ids_and_optional_probe(
         widget.set_probe_header_enabled(False)
         assert widget.probe_button.isHidden()
         assert widget.output.isHidden()
+    finally:
+        widget.close()
+        app.processEvents()
+
+
+
+def test_scraper_db_sort_cycles_all_columns_and_restores_source_order(monkeypatch, tmp_path):
+    app = _qapp()
+
+    class FakeStore:
+        def __init__(self, *_args, **_kwargs):
+            self.root = tmp_path
+
+        def _manifest(self):
+            return {}
+
+        def swap_status(self, _entry_id):
+            return ''
+
+    monkeypatch.setattr(cache_tab_module, "RobloxCacheStore", FakeStore)
+    widget = cache_tab_module.RobloxCacheTab(
+        config_manager=SimpleNamespace(settings={}),
+        view_mode='slots',
+    )
+    preview_calls = []
+    widget._load_slot_preview = lambda entry: preview_calls.append(entry.entry_id)
+
+    def make_entry(entry_id, *, name, kind, size, db_size, modified, asset_id, status, storage, url):
+        return RobloxCacheEntry(
+            entry_id=entry_id * 32,
+            file_size=size,
+            database_size=db_size,
+            modified_at=modified,
+            kind=kind,
+            url=url,
+            asset_id=asset_id,
+            has_rbxh_header=False,
+            swap_status=status,
+            storage_mode=storage,
+            name=name,
+        )
+
+    source_entries = [
+        make_entry(
+            'c', name='asset10', kind='mesh', size=20, db_size=100,
+            modified=20, asset_id='30', status='', storage='database', url='https://x/c',
+        ),
+        make_entry(
+            'a', name='asset2', kind='png', size=10, db_size=200,
+            modified=10, asset_id='10', status='swapped', storage='file', url='https://x/a',
+        ),
+        make_entry(
+            'b', name='asset1', kind='rbxm', size=20, db_size=150,
+            modified=20, asset_id='20', status='changed', storage='database', url='https://x/b',
+        ),
+        make_entry(
+            'd', name='', kind='other', size=None, db_size=None,
+            modified=None, asset_id='', status='', storage='', url='',
+        ),
+    ]
+
+    def visible_ids():
+        return [widget.table.item(row, 0).text() for row in range(widget.table.rowCount())]
+
+    try:
+        widget.entries = list(source_entries)
+        widget.entries_by_id = {entry.entry_id: entry for entry in source_entries}
+        widget._render_entries()
+        assert visible_ids() == ['c' * 32, 'a' * 32, 'b' * 32, 'd' * 32]
+        assert widget.table.item(3, 5).text() == '—'
+
+        widget.table.selectRow(1)
+        assert widget._selected_entry_id() == 'a' * 32
+        assert preview_calls == ['a' * 32]
+
+        header = widget.table.horizontalHeader()
+        # Size: descending → ascending → original source order.
+        widget._on_table_header_clicked(3)
+        assert visible_ids() == ['c' * 32, 'b' * 32, 'a' * 32, 'd' * 32]
+        assert header.isSortIndicatorShown()
+        assert header.sortIndicatorSection() == 3
+        assert header.sortIndicatorOrder() == Qt.SortOrder.DescendingOrder
+        assert widget._selected_entry_id() == 'a' * 32
+        assert preview_calls == ['a' * 32]
+
+        widget._on_table_header_clicked(3)
+        assert visible_ids() == ['a' * 32, 'c' * 32, 'b' * 32, 'd' * 32]
+        assert header.sortIndicatorOrder() == Qt.SortOrder.AscendingOrder
+
+        widget._on_table_header_clicked(3)
+        assert visible_ids() == ['c' * 32, 'a' * 32, 'b' * 32, 'd' * 32]
+        assert not header.isSortIndicatorShown()
+
+        # Date uses raw timestamps and keeps a missing timestamp at the end.
+        widget._on_table_header_clicked(5)
+        assert visible_ids() == ['c' * 32, 'b' * 32, 'a' * 32, 'd' * 32]
+        widget._on_table_header_clicked(5)
+        assert visible_ids() == ['a' * 32, 'c' * 32, 'b' * 32, 'd' * 32]
+        widget._on_table_header_clicked(5)
+        assert visible_ids() == ['c' * 32, 'a' * 32, 'b' * 32, 'd' * 32]
+
+        # Name uses natural, case-insensitive ordering (asset2 before asset10).
+        widget._on_table_header_clicked(9)
+        assert visible_ids() == ['c' * 32, 'a' * 32, 'b' * 32, 'd' * 32]
+        widget._on_table_header_clicked(9)
+        assert visible_ids() == ['b' * 32, 'a' * 32, 'c' * 32, 'd' * 32]
+        widget._on_table_header_clicked(9)
+        assert visible_ids() == ['c' * 32, 'a' * 32, 'b' * 32, 'd' * 32]
+
+        # Every data column has a complete three-state cycle; switching columns
+        # always starts again in descending order.
+        for column in range(widget.table.columnCount()):
+            widget._on_table_header_clicked(column)
+            assert widget._sort_column == column
+            assert widget._sort_direction == 'descending'
+            assert header.isSortIndicatorShown()
+            widget._on_table_header_clicked(column)
+            assert widget._sort_direction == 'ascending'
+            widget._on_table_header_clicked(column)
+            assert widget._sort_column is None
+            assert widget._sort_direction == 'none'
+            assert not header.isSortIndicatorShown()
     finally:
         widget.close()
         app.processEvents()

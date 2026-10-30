@@ -318,6 +318,8 @@ class RobloxCacheTab(QWidget):
         self.entries: list[RobloxCacheEntry] = []
         self.entries_by_id: dict[str, RobloxCacheEntry] = {}
         self._entries_page_offset = 0
+        self._sort_column: int | None = None
+        self._sort_direction = 'none'
         self._image_loader = None
         self._mesh_loader = None
         self._decoder_workers: set[QThread] = set()
@@ -555,7 +557,10 @@ class RobloxCacheTab(QWidget):
         self.table.setAlternatingRowColors(True)
         self.table.setSortingEnabled(False)
         self.table.verticalHeader().hide()
-        self.table.horizontalHeader().setStretchLastSection(True)
+        header = self.table.horizontalHeader()
+        header.setStretchLastSection(True)
+        header.setSortIndicatorShown(False)
+        header.sectionClicked.connect(self._on_table_header_clicked)
         self.table.itemDoubleClicked.connect(self._set_selected_as_target)
         self.table.itemSelectionChanged.connect(self._selection_changed)
         self.table.itemClicked.connect(self._cache_entry_clicked)
@@ -781,6 +786,104 @@ class RobloxCacheTab(QWidget):
         metadata = self._entry_metadata(entry)
         return str(metadata.get('name') or '')
 
+    @staticmethod
+    def _natural_sort_key(value: str) -> tuple[tuple[int, object], ...]:
+        """Sort strings naturally (asset2 before asset10) without locale surprises."""
+        return tuple(
+            (1, int(part)) if part.isdigit() else (0, part.casefold())
+            for part in re.split(r'(\d+)', value)
+        )
+
+    def _entry_sort_value(self, entry: RobloxCacheEntry, column: int):
+        """Return a raw value for the requested column; never sort formatted display text."""
+        if column == 0:
+            value = entry.entry_id
+        elif column == 1:
+            value = entry.asset_id or self._entry_metadata(entry).get('asset_id')
+        elif column == 2:
+            value = entry.kind
+        elif column == 3:
+            value = entry.file_size
+        elif column == 4:
+            value = entry.database_size
+        elif column == 5:
+            value = entry.modified_at
+        elif column == 6:
+            value = entry.swap_status
+        elif column == 7:
+            value = entry.storage_mode
+        elif column == 8:
+            value = entry.url
+        elif column == 9:
+            value = self._entry_name(entry)
+        else:
+            return None
+
+        if value is None:
+            return None
+        if column in {3, 4, 5}:
+            try:
+                return float(value)
+            except (TypeError, ValueError, OverflowError):
+                return None
+
+        text_value = str(value).strip()
+        if not text_value or text_value == '—':
+            return None
+        if column in {0, 1, 9}:
+            return self._natural_sort_key(text_value)
+        return text_value.casefold()
+
+    def _sort_entries(self, entries: list[RobloxCacheEntry]) -> list[RobloxCacheEntry]:
+        """Sort a filtered copy, keeping missing values last and ties source-stable."""
+        if self._sort_column is None or self._sort_direction == 'none':
+            return list(entries)
+
+        present = []
+        missing = []
+        for entry in entries:
+            value = self._entry_sort_value(entry, self._sort_column)
+            if value is None:
+                missing.append(entry)
+            else:
+                present.append((value, entry))
+
+        # Python's sort is stable, including with reverse=True, so equal values
+        # keep the order they had in the original store scan.
+        present.sort(
+            key=lambda item: item[0],
+            reverse=self._sort_direction == 'descending',
+        )
+        return [entry for _value, entry in present] + missing
+
+    def _on_table_header_clicked(self, column: int) -> None:
+        """Cycle a column through descending, ascending and original source order."""
+        if column < 0 or column >= self.table.columnCount():
+            return
+
+        if self._sort_column != column or self._sort_direction == 'none':
+            self._sort_column = column
+            self._sort_direction = 'descending'
+        elif self._sort_direction == 'descending':
+            self._sort_direction = 'ascending'
+        else:
+            self._sort_column = None
+            self._sort_direction = 'none'
+
+        header = self.table.horizontalHeader()
+        if self._sort_column is None:
+            header.setSortIndicatorShown(False)
+        else:
+            order = (
+                Qt.SortOrder.DescendingOrder
+                if self._sort_direction == 'descending'
+                else Qt.SortOrder.AscendingOrder
+            )
+            header.setSortIndicator(column, order)
+            header.setSortIndicatorShown(True)
+
+        self._render_entries()
+
     def _visible_entries(self) -> list[RobloxCacheEntry]:
         raw_query = self.search_edit.text().strip()
         query = raw_query.casefold()
@@ -938,21 +1041,49 @@ class RobloxCacheTab(QWidget):
         self._render_entries()
 
     def _render_entries(self, *_args) -> None:
-        visible_entries = self._visible_entries()
+        selected_id = self._selected_entry_id()
+        visible_entries = self._sort_entries(self._visible_entries())
         page_size = self._entry_page_size()
         page_count = (len(visible_entries) + page_size - 1) // page_size
+
         if page_count:
-            self._entries_page_offset = min(self._entries_page_offset, (page_count - 1) * page_size)
+            self._entries_page_offset = min(
+                self._entries_page_offset,
+                (page_count - 1) * page_size,
+            )
+            if selected_id:
+                selected_index = next(
+                    (
+                        index
+                        for index, entry in enumerate(visible_entries)
+                        if entry.entry_id == selected_id
+                    ),
+                    -1,
+                )
+                if selected_index >= 0 and not (
+                    self._entries_page_offset
+                    <= selected_index
+                    < self._entries_page_offset + page_size
+                ):
+                    # Keep the selected asset visible even if sorting moves it
+                    # onto another page.
+                    self._entries_page_offset = (selected_index // page_size) * page_size
             current_page = self._entries_page_offset // page_size + 1
         else:
             self._entries_page_offset = 0
             current_page = 0
-        page_entries = visible_entries[self._entries_page_offset:self._entries_page_offset + page_size]
-        self.entries_prev_button.setEnabled(self._entries_page_offset > 0)
-        self.entries_next_button.setEnabled(self._entries_page_offset + len(page_entries) < len(visible_entries))
-        self.entries_page_label.setText(f'Page {current_page} / {page_count}' if page_count else 'Page 0 / 0')
 
-        selected_id = self._selected_entry_id()
+        page_entries = visible_entries[
+            self._entries_page_offset:self._entries_page_offset + page_size
+        ]
+        self.entries_prev_button.setEnabled(self._entries_page_offset > 0)
+        self.entries_next_button.setEnabled(
+            self._entries_page_offset + len(page_entries) < len(visible_entries)
+        )
+        self.entries_page_label.setText(
+            f'Page {current_page} / {page_count}' if page_count else 'Page 0 / 0'
+        )
+
         previous_signals_blocked = self.table.blockSignals(True)
         self.table.setUpdatesEnabled(False)
         self.table.setRowCount(0)
@@ -960,13 +1091,17 @@ class RobloxCacheTab(QWidget):
         for entry in page_entries:
             row = self.table.rowCount()
             self.table.insertRow(row)
+            modified = (
+                time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(entry.modified_at))
+                if entry.modified_at is not None else '—'
+            )
             values = [
                 entry.entry_id,
                 entry.asset_id or self._cache_metadata.get(entry.entry_id, {}).get('asset_id') or '—',
                 entry.kind,
                 _format_size(entry.file_size),
                 _format_size(entry.database_size),
-                time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(entry.modified_at)),
+                modified,
                 entry.swap_status or '—',
                 entry.storage_mode,
                 entry.url,
