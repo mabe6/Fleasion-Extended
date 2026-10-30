@@ -1675,7 +1675,7 @@ class RobloxCacheTab(QWidget):
                 sample = payload[:4096]
                 decoded_sample = sample.decode('utf-8', errors='replace')
                 visible_chars = sum(
-                    character.isprintable() or character in '\\r\n\\t'
+                    character.isprintable() or ord(character) in (9, 10, 13)
                     for character in decoded_sample
                 )
                 if decoded_sample and visible_chars / max(1, len(decoded_sample)) >= 0.85:
