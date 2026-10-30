@@ -84,12 +84,10 @@ def test_dashboard_restores_fleasion_workflows_and_separates_advanced_sql(
     try:
         window = ReplacerConfigWindow(ConfigManager())
         expected_tabs = [
-            'Local DB',
             tr('ui.gui.replacer_config.replacer'),
             'Scraper DB',
             tr('ui.gui.replacer_config.subplace_joiner'),
             tr('ui.gui.replacer_config.miscellaneous'),
-            tr('ui.gui.replacer_config.proxy'),
             tr('ui.gui.replacer_config.settings'),
             'Advanced SQL',
         ]
@@ -99,12 +97,19 @@ def test_dashboard_restores_fleasion_workflows_and_separates_advanced_sql(
         ]
 
         assert actual_tabs == expected_tabs
-        assert window._local_db_tab is window._roblox_cache_tab
         assert window._scraper_db_tab is window._asset_explorer_tab
         assert window._advanced_sql_tab is window._sqlite_browser_tab
-        assert window.tab_widget.indexOf(window._replacer_tab) == 1
-        assert window.tab_widget.tabText(3) == tr('ui.gui.replacer_config.subplace_joiner')
-        assert window.tab_widget.currentWidget() is window._local_db_tab
+        assert window.tab_widget.indexOf(window._replacer_tab) == 0
+        assert window.tab_widget.tabText(2) == tr('ui.gui.replacer_config.subplace_joiner')
+        assert window.tab_widget.currentWidget() is window._replacer_tab
+        assert not hasattr(window, '_local_db_tab')
+        assert not hasattr(window, '_proxy_traffic_tab')
+        assert [
+            window._replacer_modes.tabText(index)
+            for index in range(window._replacer_modes.count())
+        ] == ['Asset ID (legacy)', 'Cache Hash']
+        assert window._hash_replacer_tab.asset_store.root == config_dir / 'HashReplacer'
+        assert window._rando_stuff_tab._hash_asset_store is window._hash_replacer_store
         assert not hasattr(window, '_hidden_replacer_tab')
     finally:
         if window is not None:
