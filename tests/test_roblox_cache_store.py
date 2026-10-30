@@ -10,6 +10,7 @@ from fleasion.database.roblox_cache_store import (
     RobloxCacheError,
     RobloxCacheStore,
     decompress_roblox_payload,
+    decompress_roblox_payload_file,
     detect_roblox_payload_kind,
     split_rbxh_entry,
 )
@@ -459,3 +460,56 @@ def test_zstd_preview_decompression_has_no_default_output_limit():
     assert len(decompress_roblox_payload(payload)) == expected_size
     with pytest.raises(RobloxCacheError, match="64-byte limit"):
         decompress_roblox_payload(payload, max_output_bytes=64)
+
+
+def test_copy_entry_payload_to_file_streams_database_blob_and_strips_rbxh_header(
+    tmp_path, monkeypatch
+):
+    target_id = "d" * 32
+    payload = b"large-cache-payload-" * 5000
+    entry_data = _make_entry("https://example.test/?id=12345", payload)
+    store = _make_blob_store(tmp_path, monkeypatch, {target_id: entry_data})
+    destination = tmp_path / "streamed-payload.bin"
+
+    url, written = store.copy_entry_payload_to_file(
+        target_id, destination, chunk_size=257
+    )
+
+    assert url == "https://example.test/?id=12345"
+    assert written == len(payload)
+    assert destination.read_bytes() == payload
+
+
+def test_copy_entry_payload_to_file_streams_legacy_file_and_strips_header(
+    tmp_path, monkeypatch
+):
+    target_id = "e" * 32
+    payload = b"legacy-cache-payload-" * 3000
+    entry_data = _make_entry("https://example.test/?id=54321", payload)
+    store = _make_store(tmp_path, monkeypatch, {target_id: entry_data})
+    destination = tmp_path / "streamed-legacy-payload.bin"
+
+    url, written = store.copy_entry_payload_to_file(
+        target_id, destination, chunk_size=193
+    )
+
+    assert url == "https://example.test/?id=54321"
+    assert written == len(payload)
+    assert destination.read_bytes() == payload
+
+
+def test_streaming_file_decompression_handles_zstd_payload_over_50_mib(tmp_path):
+    import zstandard
+
+    expected = b"Fleasion streaming preview " * (2 * 1024 * 1024)
+    source = tmp_path / "compressed.zst"
+    destination = tmp_path / "decoded.bin"
+    source.write_bytes(zstandard.ZstdCompressor().compress(expected))
+
+    decoded_size = decompress_roblox_payload_file(
+        source, destination, chunk_size=4096
+    )
+
+    assert decoded_size == len(expected)
+    assert destination.stat().st_size == len(expected)
+    assert destination.read_bytes() == expected
