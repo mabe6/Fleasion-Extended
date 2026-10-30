@@ -72,7 +72,7 @@ def test_import_asset_id_uses_asset_delivery_and_stores_returned_file(tmp_path, 
 
     def fake_download(asset_id, destination, *, session=None):
         seen["asset_id"] = asset_id
-        seen["cookie"] = session.headers.get("Cookie")
+        seen["cookie"] = session.cookies.get(".ROBLOSECURITY", domain=".roblox.com")
         Path(destination).write_bytes(payload)
 
     monkeypatch.setattr("fleasion.utils.roblox_auth.get_roblosecurity", fake_cookie)
@@ -81,7 +81,7 @@ def test_import_asset_id_uses_asset_delivery_and_stores_returned_file(tmp_path, 
     store = HashReplacerStore(tmp_path / "HashReplacer")
     imported = store.import_asset_id("1234567")
 
-    assert seen == {"asset_id": "1234567", "cookie": ".ROBLOSECURITY=cookie-token"}
+    assert seen == {"asset_id": "1234567", "cookie": "cookie-token"}
     assert store.asset_path(imported["sha256"]).read_bytes() == payload
     assert imported["asset_id"] == "1234567"
 
