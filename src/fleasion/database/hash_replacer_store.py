@@ -305,7 +305,7 @@ class HashReplacerStore:
         import requests
 
         self.assets_dir.mkdir(parents=True, exist_ok=True)
-        temporary = self.assets_dir / f".asset-{value}.download"
+        temporary = self.assets_dir / f".asset-{value}.bin"
         session = requests.Session()
         session.trust_env = False
         session.headers.update({"User-Agent": "Mozilla/5.0"})
@@ -331,6 +331,7 @@ class HashReplacerStore:
             if isinstance(record, dict):
                 record["asset_id"] = value
                 record["name"] = f"Roblox Asset {value}"
+                record["source_names"] = [f"Roblox Asset {value}.bin"]
                 index["assets"][digest] = record
                 self._save_index(index)
                 imported[0] = {**record, "sha256": digest, "path": self.asset_path(digest)}
@@ -347,8 +348,14 @@ class HashReplacerStore:
                 continue
             try:
                 asset_hash = self.validate_asset_hash(asset_hash)
-                path = self.asset_path(asset_hash)
-            except HashReplacerError:
+                filename = str(record.get("file", ""))
+                if not filename or Path(filename).name != filename:
+                    continue
+                path = (self.assets_dir / filename).resolve()
+                path.relative_to(self.assets_dir.resolve())
+            except (HashReplacerError, ValueError):
+                continue
+            if not path.is_file():
                 continue
             result.append({**record, "sha256": asset_hash, "path": path})
         result.sort(key=lambda item: (str(item.get("name", "")).casefold(), item["sha256"]))
