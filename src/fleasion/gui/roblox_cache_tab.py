@@ -212,6 +212,10 @@ class RobloxCacheTab(QWidget):
         self._audio_preview_path: Path | None = None
         self._font_panel = None
         settings = getattr(config_manager, 'settings', {})
+        self._preview_enabled = bool(
+            settings.get('asset_database_preview_enabled', True)
+            if isinstance(settings, dict) else True
+        )
         self._probe_header_enabled = bool(
             settings.get('show_cache_probe_header', False)
             if isinstance(settings, dict) else False
@@ -289,7 +293,7 @@ class RobloxCacheTab(QWidget):
         self.swaps_table.itemDoubleClicked.connect(self._load_selected_swap)
         active_layout.addWidget(self.swaps_table, 1)
         self.swap_empty_label = QLabel(
-            'No saved swaps yet. Use Cache Slots to browse every local entry, then choose a target and replacement ID.'
+            'No saved swaps yet. Use Asset Explorer to browse local entries, then choose a target and replacement ID.'
         )
         self.swap_empty_label.setWordWrap(True)
         self.swap_empty_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -555,7 +559,7 @@ class RobloxCacheTab(QWidget):
         entries_layout.addWidget(self.output)
         self.set_probe_header_enabled(self._probe_header_enabled)
 
-        self.pages.addTab(self.entries_page, 'Cache Slots')
+        self.pages.addTab(self.entries_page, 'Asset Explorer')
 
         # In the dashboard these pages are promoted to sibling top-level tabs.
         # Keep the combined inner tab widget as the default for existing callers/tests.
@@ -572,9 +576,23 @@ class RobloxCacheTab(QWidget):
             # explicitly be shown, otherwise only the detached status label is visible.
             selected_page.setVisible(True)
             if self._view_mode == 'slots':
-                # Share the scan/operation status row with the standalone Cache Slots view.
+                # Share the scan/operation status row with the standalone Asset Explorer view.
                 self.status_label.setParent(self)
                 root.addWidget(self.status_label)
+
+    def set_preview_enabled(self, enabled: bool) -> None:
+        """Show/hide the shared Asset Explorer preview pane."""
+        self._preview_enabled = bool(enabled)
+        if not self._preview_enabled:
+            self.stop_preview_button.setVisible(False)
+            self._current_preview_request_id = ''
+            self._reset_slot_preview()
+            self.preview_panel.hide()
+            return
+        entry_id = self._selected_entry_id()
+        if entry_id and entry_id in self.entries_by_id:
+            self._preview_stopped = False
+            self._selection_changed()
 
     def set_probe_header_enabled(self, enabled: bool) -> None:
         """Show or hide the optional header-probe controls to save vertical space."""
@@ -896,12 +914,17 @@ class RobloxCacheTab(QWidget):
         if entry.url:
             details.append(f'URL: {entry.url}')
         self.preview_details.setText('\n'.join(details))
+        if not self._preview_enabled:
+            self.stop_preview_button.setVisible(False)
+            self.preview_panel.hide()
+            self._reset_slot_preview()
+            return
         self._load_slot_preview(entry)
 
     def _cache_entry_clicked(self, item) -> None:
         """Reopen a preview when the user clicks the same selected row after stopping it."""
         del item
-        if not self._preview_stopped:
+        if not self._preview_stopped or not self._preview_enabled:
             return
         entry_id = self._selected_entry_id()
         entry = self.entries_by_id.get(entry_id)
@@ -1490,7 +1513,7 @@ class RobloxCacheTab(QWidget):
         self._render_entries()
 
     def _resolve_cache_names(self) -> None:
-        """Resolve cached asset names in the background, sharing the Asset Database cache."""
+        """Resolve cached names in the background and share the Asset Explorer cache."""
         if self._view_mode != 'slots' or self._name_resolution_disabled:
             return
         settings = getattr(self.config_manager, 'settings', None)
