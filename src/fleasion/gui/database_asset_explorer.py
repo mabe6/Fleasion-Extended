@@ -1492,7 +1492,7 @@ class DatabaseAssetExplorer(QWidget):
                     )
 
                 # Keep the structure tree available for animation assets as well as playback.
-                if item.kind in {'anim', 'curve-anim'}:
+                if item.kind in {'anim', 'curve-anim'} or animation_paths:
                     from ..cache.animation_viewer import AnimationViewerPanel
 
                     if self._animation_panel is None:
