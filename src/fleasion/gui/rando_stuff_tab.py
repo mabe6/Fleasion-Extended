@@ -42,6 +42,7 @@ from PyQt6.QtWidgets import (
 )
 
 from ..database.hash_replacer_store import HashReplacerError, HashReplacerStore
+from ..database.roblox_cache_store import RobloxCacheError
 from ..utils import open_folder
 from ..utils.logging import log_buffer
 from ..utils.paths import CONFIG_DIR
@@ -1480,7 +1481,7 @@ class RandoStuffTab(QWidget):
                     "local_db_cache_metadata", {}
                 ),
             )
-        except (OSError, ValueError, HashReplacerError) as exc:
+        except (OSError, ValueError, HashReplacerError, RobloxCacheError) as exc:
             QMessageBox.warning(self, "Asset Hash conversion failed", str(exc))
             self._legacy_config_status.setText(f"Conversion failed: {exc}")
             self._legacy_convert_button.setEnabled(True)
