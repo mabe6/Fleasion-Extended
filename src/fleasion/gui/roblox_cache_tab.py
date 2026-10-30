@@ -1358,27 +1358,33 @@ class RobloxCacheTab(QWidget):
                     self.preview_stack.addWidget(self._model_panel)
                 self._model_panel.load_bytes(payload, entry.asset_id or entry.entry_id[:12])
                 model_name = (
-                    self._model_panel.document.roots[0].name
+                    self._model_panel.document.roots[0].name.strip()
                     if self._model_panel.document and self._model_panel.document.roots
                     else ''
                 )
-                animation_names = self._model_panel.animation_names()
-                extra_lines = []
-                if animation_names:
-                    extra_lines.append('Animations in model: ' + ', '.join(animation_names[:30]))
-                if model_name:
-                    extra_lines.append('Model root: ' + model_name)
-                if extra_lines:
-                    self.preview_details.setText(
-                        self.preview_details.text() + '\n' + '\n'.join(extra_lines)
-                    )
-                if model_name or animation_names:
-                    metadata = {}
-                    if model_name:
-                        metadata['name'] = model_name
-                    if animation_names:
-                        metadata['contained_animations'] = ' | '.join(animation_names)
+                animation_paths = self._model_panel.animation_paths()
+                generic_names = {'folder', 'model', 'workspace', 'datamodel', 'instance'}
+                meaningful_model_name = (
+                    model_name if model_name and model_name.casefold() not in generic_names else ''
+                )
+                if meaningful_model_name:
+                    metadata = {'name': meaningful_model_name}
                     self._save_cache_metadata(entry.entry_id, metadata)
+                    self.preview_title.setText(meaningful_model_name)
+                if animation_paths:
+                    self._save_cache_metadata(
+                        entry.entry_id,
+                        {'contained_animations': ' | '.join(animation_paths)},
+                    )
+                    shown_paths = animation_paths[:40]
+                    suffix = (
+                        f'\n… and {len(animation_paths) - len(shown_paths)} more'
+                        if len(animation_paths) > len(shown_paths) else ''
+                    )
+                    self.preview_details.setText(
+                        self.preview_details.text()
+                        + '\nAnimations in model:\n• ' + '\n• '.join(shown_paths) + suffix
+                    )
                 self.preview_stack.setCurrentWidget(self._model_panel)
             elif kind == 'json' or payload.lstrip().startswith((b'{', b'[')):
                 try:
@@ -1656,7 +1662,16 @@ class RobloxCacheTab(QWidget):
             if entry.url:
                 details.append(f'URL: {entry.url}')
             self.preview_details.setText('\n'.join(details))
-        self._render_entries()
+            row = self.table.currentRow()
+            id_cell = self.table.item(row, 0) if row >= 0 else None
+            if (
+                id_cell is not None
+                and str(id_cell.data(Qt.ItemDataRole.UserRole) or '') == entry_id
+            ):
+                name_cell = self.table.item(row, 9)
+                if name_cell is not None:
+                    name_cell.setText(self._entry_name(entry))
+                    name_cell.setToolTip(self._entry_name(entry))
 
     def _resolve_cache_names(self) -> None:
         """Resolve cached names in the background and share the Asset Explorer cache."""
