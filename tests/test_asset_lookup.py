@@ -163,7 +163,7 @@ def test_download_refuses_untrusted_signed_location(tmp_path: Path) -> None:
 
 def test_asset_metadata_preview_explains_type_and_missing_asset_id() -> None:
     preview = format_asset_metadata_preview(
-        b"roblox-assettypeid: 4\\r\\n",
+        b"roblox-assettypeid: 4\r\n",
     )
 
     assert "Asset type: Mesh (ID 4)" in preview
