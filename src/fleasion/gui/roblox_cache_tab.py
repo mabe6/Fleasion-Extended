@@ -748,7 +748,7 @@ class RobloxCacheTab(QWidget):
                 'png', 'jpg', 'bmp', 'gif', 'webp', 'tiff', 'ico', 'dds', 'ktx', 'psd',
                 'mesh', 'rbxm', 'xml', 'anim', 'curve-anim', 'ogg', 'mp3', 'font',
                 'asset-metadata', 'roblox-settings', 'video-metadata', 'video-manifest',
-                'http-response',
+                'http-response', 'csgphs',
             }
             if kind_filter in exact_kinds and entry.kind != kind_filter:
                 continue
@@ -756,7 +756,7 @@ class RobloxCacheTab(QWidget):
                 image_kinds | model_kinds | animation_kinds | audio_kinds
                 | {
                     'font', 'json', 'mesh', 'asset-metadata', 'roblox-settings',
-                    'video-metadata', 'video-manifest', 'http-response',
+                    'video-metadata', 'video-manifest', 'http-response', 'csgphs',
                 }
             ):
                 continue
