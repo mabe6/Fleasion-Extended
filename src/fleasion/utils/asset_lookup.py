@@ -305,6 +305,41 @@ def _cache_header_metadata(payload: bytes) -> dict[str, str]:
     return metadata
 
 
+def format_asset_metadata_preview(payload: bytes, *, asset_id: str = "") -> str:
+    """Render a small Roblox CDN metadata record as human-readable information."""
+    metadata = _cache_header_metadata(payload)
+    lines = ["Roblox asset metadata", ""]
+
+    asset_type = metadata.get("asset_type_label") or ""
+    asset_type_id = metadata.get("asset_type_id") or ""
+    if asset_type:
+        lines.append(f"Asset type: {asset_type}")
+    elif asset_type_id:
+        lines.append(f"Asset type ID: {asset_type_id}")
+    else:
+        lines.append("Asset type: not present")
+
+    numeric_id = metadata.get("asset_id") or str(asset_id or "").strip()
+    lines.append(f"Roblox Asset ID: {numeric_id or 'not present in this record'}")
+
+    version = metadata.get("asset_version")
+    if version:
+        lines.append(f"Asset version: {version}")
+    if metadata.get("asset_recordable"):
+        lines.append(f"Recordable: {metadata['asset_recordable']}")
+
+    lines.extend([
+        "",
+        "This cache entry contains metadata only, not the asset's geometry or image data.",
+        "For a model or mesh preview, select the corresponding RBXM, XML or Mesh cache entry.",
+    ])
+    if not numeric_id:
+        lines.append(
+            "A CDN/cache hash alone cannot be converted back into a Roblox Asset ID."
+        )
+    return "\n".join(lines)
+
+
 def _expiry_from_url(url: str) -> str:
     match = re.search(r'(?:[?&]|~)Expires=(\d+)|(?:[?&]|~)exp=(\d+)', url, re.IGNORECASE)
     if match is None:
