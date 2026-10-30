@@ -9,7 +9,6 @@ import json
 import re
 import sqlite3
 import tempfile
-import zlib
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -52,7 +51,6 @@ from ..utils.roblox_auth import get_roblosecurity as _get_roblosecurity
 
 
 _SAMPLE_BYTES = 8192
-_MAX_PREVIEW_BYTES = 50 * 1024 * 1024
 _MAX_ROWS = 100_000
 _NAME_RESOLUTION_BATCH = 50
 _MAX_NAME_RESOLUTION = 20_000
@@ -100,6 +98,7 @@ _KIND_LABELS = {
     'ogg': 'OGG audio',
     'mp3': 'MP3 audio',
     'json': 'JSON data',
+    'compressed': 'Compressed payload (type determined on open)',
     'other': 'Unknown format',
 }
 _IMAGE_KINDS = {'png', 'jpg', 'bmp', 'gif', 'webp', 'tiff', 'ico', 'dds', 'ktx', 'psd'}
@@ -125,6 +124,7 @@ _KIND_ORDER = (
     'mp3',
     'font',
     'json',
+    'compressed',
     'other',
 )
 _SEARCH_FIELD_LABELS = (
@@ -139,35 +139,13 @@ _SEARCH_FIELD_LABELS = (
 _DEFAULT_SEARCH_FIELDS = {'name', 'asset_id', 'type', 'hash', 'url'}
 
 
-def _decompress_detection_prefix(payload: bytes) -> bytes:
-    """Decode a compressed prefix without requiring the whole cache file.
-
-    The explorer intentionally samples large entries for speed; gzip.decompress()
-    rejects a truncated sample, while a streaming decompressor can still reveal
-    the inner mesh, texture, or Roblox model signature.
-    """
-    if not payload:
-        return payload
-    if payload.startswith(b'\x1f\x8b'):
-        try:
-            return zlib.decompressobj(16 + zlib.MAX_WBITS).decompress(payload)
-        except zlib.error:
-            return payload
-    if payload.startswith(b'\x28\xb5\x2f\xfd'):
-        try:
-            import zstandard
-
-            return zstandard.ZstdDecompressor().decompressobj().decompress(payload)
-        except Exception:
-            return payload
-    return payload
-
-
 def _detect_kind(sample: bytes) -> tuple[str, str]:
+    """Classify from the stored prefix without decompressing any cache payload."""
     url, payload, has_header = split_rbxh_entry(sample)
     if not has_header:
         payload = sample
-    payload = _decompress_detection_prefix(payload)
+    if payload.startswith((b'\\x1f\\x8b', b'\\x28\\xb5\\x2f\\xfd')):
+        return 'compressed', url
     kind = detect_roblox_payload_kind(payload)
     # Some XML assets contain animations but have no binary RBXM signature.
     if kind == 'xml' and b'CurveAnimation' in payload:
@@ -248,16 +226,10 @@ def _format_atime(value: int | None) -> str:
 
 
 def _embedded_name(payload: bytes) -> str:
-    """Extract a useful Name property from textual Roblox XML when it is in the sample."""
+    """Extract a Name property only when it is already present in the raw sample."""
     if not payload:
         return ''
-    data = payload
-    if data.startswith(b'\x1f\x8b'):
-        try:
-            data = gzip.decompress(data)
-        except (OSError, EOFError):
-            return ''
-    text = data.decode('utf-8', errors='ignore')
+    text = payload.decode('utf-8', errors='ignore')
     match = _EMBEDDED_NAME_RE.search(text)
     if match:
         value = html.unescape(match.group(1)).strip()
@@ -1239,21 +1211,25 @@ class DatabaseAssetExplorer(QWidget):
         request_id = item.entry_id
         self._current_request_id = request_id
         try:
-            if item.content_size > _MAX_PREVIEW_BYTES:
-                self._show_info(
-                    f'This payload is {_format_size(item.content_size)}. '
-                    'Preview is skipped for safety; use Export payload to inspect it.'
-                )
-                return
             if self.database_path is None:
                 return
             data = self._read_entry_bytes(item.entry_id)
             _url, payload, _has_header = split_rbxh_entry(data)
             # Keep the raw cached bytes for Export; only decode a copy for previewing.
             self._current_payload = payload
-            payload = decompress_roblox_payload(
-                payload, max_output_bytes=_MAX_PREVIEW_BYTES
-            )
+            # The entry is decoded only after selection; keep raw bytes available for Export.
+            payload = decompress_roblox_payload(payload)
+            if item.kind == 'compressed':
+                item.kind = detect_roblox_payload_kind(payload)
+                if item.kind == 'xml' and b'CurveAnimation' in payload:
+                    item.kind = 'curve-anim'
+                elif item.kind == 'xml' and b'KeyframeSequence' in payload:
+                    item.kind = 'anim'
+                row = self.asset_table.currentRow()
+                if row >= 0 and self.asset_table.item(row, 4) is not None:
+                    self.asset_table.item(row, 4).setText(
+                        _KIND_LABELS.get(item.kind, item.kind.upper())
+                    )
 
             if item.kind in _IMAGE_KINDS:
                 from ..cache.cache_viewer import ImageLoaderThread
