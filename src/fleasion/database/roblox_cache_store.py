@@ -161,10 +161,10 @@ def decompress_roblox_payload_file(
 def parse_cached_http_response(payload: bytes) -> tuple[dict[str, str], bytes] | None:
     """Parse response headers embedded in a cache payload, if the bytes are a header block."""
     sample = payload[:65536]
-    separator = sample.find(b'\\r\\n\\r\\n')
+    separator = sample.find(b'\r\n\r\n')
     separator_size = 4
     if separator < 0:
-        separator = sample.find(b'\\n\\n')
+        separator = sample.find(b'\n\n')
         separator_size = 2
 
     if separator >= 0:
@@ -185,14 +185,14 @@ def parse_cached_http_response(payload: bytes) -> tuple[dict[str, str], bytes] |
                 body_start = cursor
                 break
             if line.startswith((b'HTTP/1.', b'HTTP/2', b'HTTP/3')):
-                header_lines.append(raw_line.rstrip(b'\\r\\n'))
+                header_lines.append(raw_line.rstrip(b'\r\n'))
                 cursor += len(raw_line)
                 continue
             if b':' not in line:
                 if saw_header:
                     body_start = cursor
                 break
-            raw_key, raw_value = line.split(b':', 1)
+            raw_key, _raw_value = line.split(b':', 1)
             try:
                 key = raw_key.decode('ascii').strip().casefold()
             except UnicodeDecodeError:
@@ -201,12 +201,12 @@ def parse_cached_http_response(payload: bytes) -> tuple[dict[str, str], bytes] |
                 if saw_header:
                     body_start = cursor
                 break
-            header_lines.append(raw_line.rstrip(b'\\r\\n'))
+            header_lines.append(raw_line.rstrip(b'\r\n'))
             saw_header = True
             cursor += len(raw_line)
         if not saw_header:
             return None
-        header_bytes = b'\\n'.join(header_lines)
+        header_bytes = b'\n'.join(header_lines)
         if body_start == len(payload) and cursor < len(payload):
             body_start = cursor
 
@@ -233,8 +233,6 @@ def parse_cached_http_response(payload: bytes) -> tuple[dict[str, str], bytes] |
         'access-control-expose-headers', 'server', 'last-modified',
         'x-rbx-zstd-dict-sha', 'roblox-assettypeid',
     }
-    # Some Roblox responses expose only roblox-assettypeid plus the body separator.
-    # A single recognised header is enough; the body is classified independently below.
     if not set(headers).intersection(recognised):
         return None
     body = payload[body_start:] if body_start < len(payload) else b''
