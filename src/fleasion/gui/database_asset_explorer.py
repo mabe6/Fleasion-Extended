@@ -1478,6 +1478,7 @@ class DatabaseAssetExplorer(QWidget):
                     self.preview_stack.addWidget(self._model_preview_tabs)
 
                 self._model_panel.load_bytes(payload, item.asset_id or item.entry_id[:12])
+                self._model_panel.show()
                 animation_paths = self._model_panel.animation_paths()
                 if animation_paths:
                     shown_paths = animation_paths[:40]
@@ -1502,6 +1503,8 @@ class DatabaseAssetExplorer(QWidget):
                     tab_index = self._model_preview_tabs.indexOf(self._animation_panel)
                     if loaded and tab_index < 0:
                         self._model_preview_tabs.addTab(self._animation_panel, 'Playback')
+                    if loaded:
+                        self._animation_panel.show()
                     elif not loaded and tab_index >= 0:
                         self._model_preview_tabs.removeTab(tab_index)
                     if not loaded:
