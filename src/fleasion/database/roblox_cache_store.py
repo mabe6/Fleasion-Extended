@@ -44,6 +44,11 @@ def _zstd_frame_offset(payload: bytes) -> int | None:
             return offset
     return None
 
+def is_roblox_compressed_payload(payload: bytes) -> bool:
+    """Return whether a cache payload starts with a supported gzip/Zstandard wrapper."""
+    return payload.startswith(_GZIP_MAGIC) or _zstd_frame_offset(payload) is not None
+
+
 
 class RobloxCacheError(Exception):
     """A cache operation failed for a reason suitable for display in the GUI."""
