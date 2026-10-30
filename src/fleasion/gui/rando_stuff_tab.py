@@ -41,6 +41,7 @@ from PyQt6.QtWidgets import (
 )
 
 from ..database.hash_replacer_store import HashReplacerError, HashReplacerStore
+from ..utils import open_folder
 from ..utils.logging import log_buffer
 from ..utils.paths import CONFIG_DIR
 from ..utils.plural import format_count
@@ -927,9 +928,7 @@ class RandoStuffTab(QWidget):
         hash_asset_buttons.addWidget(self._hash_import_folder_button)
         self._hash_open_assets_button = QPushButton("Open asset folder")
         self._hash_open_assets_button.clicked.connect(
-            lambda: __import__("fleasion.utils", fromlist=["open_folder"]).open_folder(
-                self._hash_asset_store.assets_dir
-            )
+            lambda: open_folder(self._hash_asset_store.assets_dir)
         )
         hash_asset_buttons.addWidget(self._hash_open_assets_button)
         hash_asset_buttons.addStretch(1)
