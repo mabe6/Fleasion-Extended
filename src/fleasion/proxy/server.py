@@ -2590,6 +2590,7 @@ class FleasionProxy:
                                 _serve_category,
                                 f'CDN local serve start: host={host} path={path[:160]} '
                                 f'file={_serve_path.name} exists={_serve_exists} bytes={_serve_size}',
+                                level='DEBUG',
                             )
                             response = await asyncio.get_event_loop().run_in_executor(
                                 self._executor, _serve_local_file, value
@@ -2603,6 +2604,7 @@ class FleasionProxy:
                                 _serve_category,
                                 f'CDN local serve complete: host={host} path={path[:160]} '
                                 f'file={_serve_path.name} status={_status_line} response_bytes={len(response)}',
+                                level='DEBUG',
                             )
                             writer.write(response)
                             await writer.drain()
@@ -2801,6 +2803,7 @@ class FleasionProxy:
                         f'Upstream HTTP {status_code} from {host}{path[:180]} '
                         f'content-type={ct or "unknown"} body={len(resp_body_raw)} bytes '
                         f'retry-after={retry_after or "none"} preview={preview!r}',
+                        level='WARNING',
                     )
                 elif status_code >= 400 and host in {
                     ASSET_DELIVERY_HOST,
@@ -2814,6 +2817,7 @@ class FleasionProxy:
                         'Proxy',
                         f'Upstream HTTP {status_code} from {host}{path[:180]} '
                         f'content-type={ct or "unknown"} body={len(resp_body_raw)} bytes{snippet_text}',
+                        level='WARNING',
                     )
 
                 # Determine if we need to modify the response body

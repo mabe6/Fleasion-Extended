@@ -36,7 +36,7 @@ class LogsWindow(QDialog):
             | Qt.WindowType.WindowCloseButtonHint
         )
 
-        self._last_count = 0
+        self._last_sequence = 0
         self._setup_ui()
         self._set_icon()
         self._start_updates()
@@ -184,20 +184,21 @@ class LogsWindow(QDialog):
         super().showEvent(a0)
 
     def _update_logs(self):
-        logs = log_buffer.get_all()
-        count = len(logs)
-        if count != self._last_count:
+        sequence, new_logs, was_trimmed = log_buffer.get_since(self._last_sequence)
+        if new_logs or was_trimmed:
             scrollbar = self.text_edit.verticalScrollBar()
             was_at_bottom = scrollbar.value() >= scrollbar.maximum() - 4
 
-            new_text = '\n'.join(logs[self._last_count :])
-            prefix = '\n' if self._last_count > 0 else ''
+            if was_trimmed:
+                self.text_edit.clear()
+            new_text = '\n'.join(new_logs)
+            prefix = '\n' if self._last_sequence > 0 and not was_trimmed else ''
 
             cursor = QTextCursor(self.text_edit.document())
             cursor.movePosition(QTextCursor.MoveOperation.End)
             cursor.insertText(prefix + new_text)
 
-            self._last_count = count
+            self._last_sequence = sequence
 
             if was_at_bottom:
                 scrollbar.setValue(scrollbar.maximum())

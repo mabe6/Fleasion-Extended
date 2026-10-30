@@ -3,6 +3,7 @@
 import atexit
 import html
 import json
+import logging
 import os
 import platform
 import secrets
@@ -4062,7 +4063,11 @@ def main():
     global _single_instance_app, _single_instance_control_server
     global _single_instance_shared_memory, _single_instance_tray
 
-    setup_logging()
+    debug_requested = any(
+        argument in {'--proxy-debug', '-proxy-debug', '--proxy-debug-mode'}
+        for argument in sys.argv[1:]
+    )
+    setup_logging(level=logging.DEBUG if debug_requested else logging.INFO)
     install_exception_hooks()
 
     import argparse as _ap

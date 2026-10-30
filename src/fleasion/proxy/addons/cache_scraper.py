@@ -1208,7 +1208,7 @@ class CacheScraper:
                         metadata=metadata,
                     )
                     if success:
-                        log_buffer.log('Cache', f'KTX\u2192PNG (local): {asset_id}')
+                        log_buffer.log('Cache', f'KTX\u2192PNG (local): {asset_id}', level='DEBUG')
                     return
 
             api_content = self._fetch_from_api(asset_id)
@@ -1235,6 +1235,7 @@ class CacheScraper:
                         log_buffer.log(
                             'Cache',
                             f'Converted {type_name} to {content_desc}: {asset_id}',
+                            level='DEBUG',
                         )
                         # For TexturePack: preserve raw KTX2 sidecar AND populate
                         # the sub-asset lookup so replacements can target sub-asset IDs.
@@ -1264,7 +1265,7 @@ class CacheScraper:
                 )
                 if success:
                     type_name = self.cache_manager.get_asset_type_name(asset_type)
-                    log_buffer.log('Cache', f'Cached {type_name} (raw fallback): {asset_id}')
+                    log_buffer.log('Cache', f'Cached {type_name} (raw fallback): {asset_id}', level='DEBUG')
         except Exception as exc:
             log_buffer.log('Cache', f'Background conversion error for {asset_id}: {exc}')
             if original_content is not None and self._generation_is_current(generation):
@@ -1472,6 +1473,7 @@ class CacheScraper:
                     'TexPackSlot',
                     f'Archived {parent_id} slot{slot} {pack_label} q={quality} '
                     f'{new_w}x{new_h} mips={level_count} sha256={digest[:12]}',
+                    level='DEBUG',
                 )
 
             if canonical_action is not None:
@@ -1481,12 +1483,14 @@ class CacheScraper:
                         'TexPackSlot',
                         f'Upgrading canonical {parent_id} slot{slot}: '
                         f'{old_w}x{old_h} -> {new_w}x{new_h}',
+                        level='DEBUG',
                     )
                 elif action == 'replaced':
                     log_buffer.log(
                         'TexPackSlot',
                         f'Replacing equal-resolution canonical {parent_id} slot{slot}: '
                         f'{new_w}x{new_h}, bytes changed',
+                        level='DEBUG',
                     )
 
                 slot_name = _TEXPACK_SLOT_NAMES.get(slot, f'slot{slot}')
@@ -1494,6 +1498,7 @@ class CacheScraper:
                     'TexPackSlot',
                     f'Canonical {slot_name} {new_w}x{new_h} for pack {parent_id} '
                     f'({len(ktx2_bytes)} bytes) -> {slot_path.name}',
+                    level='DEBUG',
                 )
         except Exception as exc:
             log_buffer.log('TexPackSlot', f'Failed to store slot {slot} for {parent_id}: {exc}')
@@ -1546,7 +1551,7 @@ class CacheScraper:
             )
             if success:
                 type_name = self.cache_manager.get_asset_type_name(asset_type)
-                log_buffer.log('Cache', f'Cached {type_name}: {asset_id} ({len(data)} bytes)')
+                log_buffer.log('Cache', f'Cached {type_name}: {asset_id} ({len(data)} bytes)', level='DEBUG')
         except Exception as exc:
             log_buffer.log('Cache', f'Cache store error for {asset_id}: {exc}')
 
@@ -1574,7 +1579,7 @@ class CacheScraper:
                 )
                 if success:
                     type_name = self.cache_manager.get_asset_type_name(asset_type)
-                    log_buffer.log('Cache', f'Replicated {type_name}: {dest_id} (from {source_id})')
+                    log_buffer.log('Cache', f'Replicated {type_name}: {dest_id} (from {source_id})', level='DEBUG')
         except Exception as exc:
             log_buffer.log('Cache', f'Replication error {source_id}->{dest_id}: {exc}')
 
@@ -1662,6 +1667,7 @@ class CacheScraper:
                 'Cache',
                 f'Tracking direct asset redirect: asset_id={asset_id}, '
                 f'cdn_host={host or "<missing>"}, asset_type={asset_type or "pending detection"}.',
+                level='DEBUG',
             )
             return
 
@@ -1696,6 +1702,7 @@ class CacheScraper:
             'Cache',
             f'Cached direct asset response: asset_id={asset_id}, '
             f'asset_type={asset_type or "unknown"}, bytes={len(body)}.',
+            level='DEBUG',
         )
 
     # GUI-callable interface (same as before - no change needed in GUI code)

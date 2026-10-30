@@ -151,6 +151,61 @@ def test_unhandled_main_and_worker_exceptions_are_logged(tmp_path, monkeypatch):
     assert "LookupError: worker scan failed" in text
 
 
+
+def test_debug_entries_are_suppressed_by_default_and_enabled_on_request(tmp_path, monkeypatch):
+    buffer, _logs_dir, log_file = _make_buffer(tmp_path, monkeypatch)
+    buffer.log("Cache", "Cached Mesh: 123 (1024 bytes)", level="DEBUG")
+    buffer.log("DEBUG_CDN", "Per-request diagnostic")
+    assert buffer.get_all() == []
+    assert not log_file.exists()
+
+    buffer.set_level(logging.DEBUG)
+    buffer.log("Cache", "Cached Mesh: 123 (1024 bytes)", level="DEBUG")
+    buffer.log("DEBUG_CDN", "Per-request diagnostic")
+    text = log_file.read_text(encoding="utf-8")
+    assert "Cached Mesh: 123" in text
+    assert "Per-request diagnostic" in text
+    assert "[DEBUG]" in text
+
+
+def test_live_buffer_is_bounded_and_reports_dropped_entries(tmp_path, monkeypatch):
+    monkeypatch.setattr(fleasion_logging, "MAX_LIVE_LOG_ENTRIES", 3)
+    buffer, _logs_dir, _log_file = _make_buffer(tmp_path, monkeypatch)
+    for index in range(5):
+        buffer.log("Test", f"entry-{index}")
+
+    sequence, entries, was_trimmed = buffer.get_since(1)
+    assert sequence == 5
+    assert was_trimmed is True
+    assert len(entries) == 3
+    assert "entry-2" in entries[0]
+    assert "entry-4" in entries[-1]
+
+    next_sequence, new_entries, next_trimmed = buffer.get_since(4)
+    assert next_sequence == 5
+    assert next_trimmed is False
+    assert len(new_entries) == 1
+    assert "entry-4" in new_entries[0]
+
+
+def test_repeated_warnings_are_suppressed_and_summarized(tmp_path, monkeypatch):
+    buffer, _logs_dir, log_file = _make_buffer(tmp_path, monkeypatch)
+    monkeypatch.setattr(fleasion_logging, "WARNING_DEDUP_WINDOW_SECONDS", 10.0)
+    monotonic_now = [100.0]
+    monkeypatch.setattr(fleasion_logging.time, "monotonic", lambda: monotonic_now[0])
+
+    buffer.log("Proxy", "Connection refused", level="WARNING")
+    monotonic_now[0] = 101.0
+    buffer.log("Proxy", "Connection refused", level="WARNING")
+    assert log_file.read_text(encoding="utf-8").count("Connection refused") == 1
+
+    monotonic_now[0] = 111.0
+    buffer.log("Proxy", "Connection refused", level="WARNING")
+    text = log_file.read_text(encoding="utf-8")
+    assert "Suppressed 1 duplicate warning(s)" in text
+    assert text.count("Connection refused") == 3
+
+
 def test_log_write_failure_does_not_raise(tmp_path, monkeypatch):
     buffer, _logs_dir, log_file = _make_buffer(tmp_path, monkeypatch)
     monkeypatch.setattr(fleasion_logging, "LOGS_DIR", tmp_path / "not-a-directory")

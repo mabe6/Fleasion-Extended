@@ -7,7 +7,9 @@ import logging
 import re
 import sys
 import threading
+import time
 import traceback
+from collections import deque
 from datetime import datetime
 from typing import Any
 
@@ -15,6 +17,9 @@ from .paths import LOG_FILE, LOGS_DIR
 
 MAX_LOG_FILE_BYTES = 1 * 1024 * 1024
 MAX_LOG_ARCHIVES = 5
+MAX_LIVE_LOG_ENTRIES = 5000
+MAX_WARNING_DEDUP_KEYS = 512
+WARNING_DEDUP_WINDOW_SECONDS = 30.0
 _REDACTED = '[REDACTED]'
 
 # Header values are deliberately redacted as a whole: cookies often contain
@@ -69,16 +74,24 @@ def redact_sensitive_data(value: object) -> str:
 
 
 class LogBuffer:
-    """Thread-safe in-memory log buffer with persistent, size-limited output."""
+    """Thread-safe log buffer with bounded live history and persistent output."""
 
     def __init__(self):
-        self._buffer: list[str] = []
+        self._buffer: deque[str] = deque(maxlen=MAX_LIVE_LOG_ENTRIES)
+        self._sequence = 0
         self._callbacks: list[Any] = []
         self._lock = threading.Lock()
         self._pending_notifications = False
         self._batch_timer: threading.Timer | None = None
         self._closed = False
+        self._minimum_level = logging.INFO
+        self._warning_windows: dict[tuple[str, str], tuple[float, int]] = {}
         self._prepare_log_file()
+
+    def set_level(self, level: int) -> None:
+        """Set the minimum level written to the live buffer and persistent log."""
+        with self._lock:
+            self._minimum_level = int(level)
 
     def _archive_paths(self) -> list:
         pattern = f'{LOG_FILE.stem}-*{LOG_FILE.suffix}'
@@ -88,11 +101,13 @@ class LogBuffer:
             return []
 
     def _prune_archives(self) -> None:
-        archives = sorted(
-            self._archive_paths(),
-            key=lambda path: path.stat().st_mtime if path.exists() else 0,
-            reverse=True,
-        )
+        def _mtime(path):
+            try:
+                return path.stat().st_mtime
+            except OSError:
+                return 0
+
+        archives = sorted(self._archive_paths(), key=_mtime, reverse=True)
         for stale in archives[MAX_LOG_ARCHIVES:]:
             try:
                 stale.unlink(missing_ok=True)
@@ -126,33 +141,96 @@ class LogBuffer:
             # any subsequent write error as a non-fatal logging failure.
             pass
 
+    def _append_locked(self, now: datetime, category: str, message: str, level: str) -> None:
+        safe_category = redact_sensitive_data(category)
+        safe_message = redact_sensitive_data(message)
+        timestamp = now.strftime('%H:%M:%S')
+        entry = f'[{timestamp}] [{level}] [{safe_category}] {safe_message}'
+        self._buffer.append(entry)
+        self._sequence += 1
+
+        try:
+            LOGS_DIR.mkdir(parents=True, exist_ok=True)
+            line = f'{now:%Y-%m-%d} {entry}\n'
+            self._rotate_log_file_if_needed(len(line.encode('utf-8')))
+            with LOG_FILE.open('a', encoding='utf-8') as handle:
+                handle.write(line)
+                handle.flush()
+        except OSError:
+            # UI and application logic continue even when disk access fails.
+            pass
+
+    def _schedule_notifications_locked(self) -> None:
+        if not self._pending_notifications and not self._closed:
+            self._pending_notifications = True
+            self._batch_timer = threading.Timer(0.05, self._notify_callbacks)
+            self._batch_timer.daemon = True
+            self._batch_timer.start()
+
+    def _flush_expired_warnings_locked(self, now: datetime, monotonic_now: float) -> bool:
+        emitted = False
+        for key, (window_start, suppressed_count) in list(self._warning_windows.items()):
+            if monotonic_now - window_start < WARNING_DEDUP_WINDOW_SECONDS:
+                continue
+            if suppressed_count:
+                category, message = key
+                self._append_locked(
+                    now,
+                    category,
+                    f'Suppressed {suppressed_count} duplicate warning(s) in the previous '
+                    f'{WARNING_DEDUP_WINDOW_SECONDS:g}s: {message}',
+                    'WARNING',
+                )
+                emitted = True
+            del self._warning_windows[key]
+        return emitted
+
     def log(self, category: str, message: str, *, level: str = 'INFO') -> None:
-        """Append one sanitized entry and notify GUI subscribers in batches."""
-        now = datetime.now()
+        """Append one sanitized entry, filtering DEBUG and rate-limiting repeats."""
         safe_category = redact_sensitive_data(category)
         safe_message = redact_sensitive_data(message)
         safe_level = str(level).upper()
-        timestamp = now.strftime('%H:%M:%S')
-        entry = f'[{timestamp}] [{safe_level}] [{safe_category}] {safe_message}'
+        if safe_level == 'INFO' and (
+            safe_category.upper().startswith('DEBUG') or safe_category == 'ProxyDiag'
+        ):
+            safe_level = 'DEBUG'
+        numeric_level = getattr(logging, safe_level, logging.INFO)
+        if not isinstance(numeric_level, int):
+            numeric_level = logging.INFO
+        if numeric_level < self._minimum_level:
+            return
 
+        now = datetime.now()
+        monotonic_now = time.monotonic()
         with self._lock:
-            self._buffer.append(entry)
-            try:
-                LOGS_DIR.mkdir(parents=True, exist_ok=True)
-                line = f'{now:%Y-%m-%d} {entry}\n'
-                self._rotate_log_file_if_needed(len(line.encode('utf-8')))
-                with LOG_FILE.open('a', encoding='utf-8') as handle:
-                    handle.write(line)
-                    handle.flush()
-            except OSError:
-                # UI and application logic continue even when disk access fails.
-                pass
+            summary_written = self._flush_expired_warnings_locked(now, monotonic_now)
 
-            if not self._pending_notifications and not self._closed:
-                self._pending_notifications = True
-                self._batch_timer = threading.Timer(0.05, self._notify_callbacks)
-                self._batch_timer.daemon = True
-                self._batch_timer.start()
+            if numeric_level >= logging.WARNING:
+                key = (safe_category, safe_message)
+                previous = self._warning_windows.get(key)
+                if previous is not None and monotonic_now - previous[0] < WARNING_DEDUP_WINDOW_SECONDS:
+                    self._warning_windows[key] = (previous[0], previous[1] + 1)
+                    if summary_written:
+                        self._schedule_notifications_locked()
+                    return
+
+                if key not in self._warning_windows and len(self._warning_windows) >= MAX_WARNING_DEDUP_KEYS:
+                    oldest_key = next(iter(self._warning_windows))
+                    old_start, old_count = self._warning_windows.pop(oldest_key)
+                    if old_count:
+                        old_category, old_message = oldest_key
+                        self._append_locked(
+                            now,
+                            old_category,
+                            f'Suppressed {old_count} duplicate warning(s) before dedup window '
+                            f'eviction: {old_message}',
+                            'WARNING',
+                        )
+                        summary_written = True
+                self._warning_windows[key] = (monotonic_now, 0)
+
+            self._append_locked(now, safe_category, safe_message, safe_level)
+            self._schedule_notifications_locked()
 
     def _notify_callbacks(self) -> None:
         """Notify callbacks outside the lock to avoid callback deadlocks."""
@@ -168,12 +246,23 @@ class LogBuffer:
                 pass
 
     def get_all(self) -> list[str]:
-        """Return a snapshot of all entries recorded in this process."""
+        """Return the retained live entries (at most MAX_LIVE_LOG_ENTRIES)."""
         with self._lock:
-            return self._buffer.copy()
+            return list(self._buffer)
+
+    def get_since(self, sequence: int) -> tuple[int, list[str], bool]:
+        """Return entries after a sequence, plus whether older entries were dropped."""
+        with self._lock:
+            entries = list(self._buffer)
+            oldest_sequence = self._sequence - len(entries)
+            was_trimmed = sequence < oldest_sequence
+            if was_trimmed:
+                return self._sequence, entries, True
+            offset = max(0, sequence - oldest_sequence)
+            return self._sequence, entries[offset:], False
 
     def get_text(self) -> str:
-        """Return all in-memory entries as text."""
+        """Return the retained in-memory entries as text."""
         with self._lock:
             return '\n'.join(self._buffer) if self._buffer else 'No logs yet.'
 
@@ -190,8 +279,7 @@ class LogBuffer:
                 self._callbacks.remove(callback)
 
     def flush(self) -> None:
-        """Log entries are flushed and closed after each write; retained for shutdown hooks."""
-        # Each file write is explicitly flushed inside its context manager.
+        """Writes are flushed and closed per entry; retained for shutdown hooks."""
         return
 
     def close(self) -> None:
@@ -308,6 +396,7 @@ def setup_logging(
         root.addHandler(handler)
 
     handler.setLevel(logging.DEBUG)
+    target.set_level(level)
     if root.level == logging.NOTSET or root.level > level:
         root.setLevel(level)
 
