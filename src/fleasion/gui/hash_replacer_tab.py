@@ -1,7 +1,6 @@
 """GUI for local Roblox cache-hash replacement profiles."""
 from __future__ import annotations
 
-from pathlib import Path
 
 from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import (
@@ -9,6 +8,7 @@ from PyQt6.QtWidgets import (
     QHBoxLayout,
     QInputDialog,
     QLabel,
+    QLineEdit,
     QMessageBox,
     QPushButton,
     QTableWidget,
@@ -92,6 +92,16 @@ class HashReplacerTab(QWidget):
         self.add_rule_button.clicked.connect(self._add_rule)
         rule_row.addWidget(self.add_rule_button)
         root.addLayout(rule_row)
+
+        download_row = QHBoxLayout()
+        download_row.addWidget(QLabel("Or download replacement by Asset ID:"))
+        self.asset_id_edit = QLineEdit()
+        self.asset_id_edit.setPlaceholderText("Numeric Roblox Asset ID")
+        download_row.addWidget(self.asset_id_edit, 1)
+        self.download_asset_button = QPushButton("Download ID to library")
+        self.download_asset_button.clicked.connect(self._download_asset_id)
+        download_row.addWidget(self.download_asset_button)
+        root.addLayout(download_row)
 
         self.rules_table = QTableWidget(0, 4)
         self.rules_table.setHorizontalHeaderLabels(
@@ -245,6 +255,27 @@ class HashReplacerTab(QWidget):
             QMessageBox.warning(self, "Hash profiles", str(exc))
             return
         self.refresh_profiles("Default")
+
+    def _download_asset_id(self) -> None:
+        asset_id = self.asset_id_edit.text().strip()
+        self.download_asset_button.setEnabled(False)
+        self.status_label.setText(f"Downloading Roblox asset {asset_id} into the local hash library…")
+        try:
+            asset = self.asset_store.import_asset_id(asset_id)
+        except (HashReplacerError, OSError, RuntimeError) as exc:
+            QMessageBox.warning(self, "Asset download failed", str(exc))
+            self.status_label.setText(str(exc))
+            return
+        finally:
+            self.download_asset_button.setEnabled(True)
+        self.refresh_assets()
+        index = self.asset_combo.findData(asset["sha256"])
+        if index >= 0:
+            self.asset_combo.setCurrentIndex(index)
+        self.status_label.setText(
+            f"Imported Roblox Asset {asset_id} as local SHA-256 {asset['sha256']}."
+            " Enter a target cache hash and add the rule."
+        )
 
     def _add_rule(self) -> None:
         name = self.profile_combo.currentText()
