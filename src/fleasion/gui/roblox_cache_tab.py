@@ -42,7 +42,6 @@ from ..database.roblox_cache_store import (
     default_roblox_cache_root,
     detect_roblox_cache_payload_kind,
     detect_roblox_payload_kind,
-    decompress_roblox_payload,
     decompress_roblox_payload_file,
     split_rbxh_entry,
 )
