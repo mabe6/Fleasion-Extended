@@ -997,8 +997,11 @@ class ReplacerConfigWindow(QDialog):
 
         self._create_config_section(top_section_layout)
         self._create_tree_section(top_section_layout)
-        self._replacer_top_proxy_gate = self._proxy_required(top_section_widget)
-        replacer_layout.addWidget(self._replacer_top_proxy_gate)
+        replacer_layout.addWidget(QLabel(
+            "Asset ID rules are the original proxy-based workflow. For direct local Roblox cache "
+            "replacement without the HTTP proxy, use Miscellaneous → Asset Hash."
+        ))
+        replacer_layout.addWidget(top_section_widget)
         self._create_edit_section(replacer_layout)
         self._create_footer(replacer_layout)
         return replacer_widget
