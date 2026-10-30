@@ -157,7 +157,7 @@ def test_download_refuses_untrusted_signed_location(tmp_path: Path) -> None:
     )
     session = _FakeSession(get_responses=[response], post_response=_FakeResponse())
 
-    with pytest.raises(AssetLookupError, match='unexpected download host'):
+    with pytest.raises(AssetLookupError, match='not hosted by Roblox'):
         download_asset('12345', tmp_path / 'asset.bin', session=cast(requests.Session, session))
 
 def test_cache_header_parser_treats_asset_type_as_metadata_not_asset_id() -> None:
