@@ -602,6 +602,27 @@ def test_fast_flags_write_to_sober_config(tmp_path, monkeypatch):
     assert not (config_path.stat().st_mode & stat.S_IWRITE)
 
 
+def test_asset_id_modification_download_does_not_require_proxy(monkeypatch, tmp_path):
+    from fleasion.utils import asset_lookup
+
+    payload = b"downloaded Roblox asset bytes"
+    calls = []
+
+    def fake_download(asset_id, destination):
+        calls.append(asset_id)
+        Path(destination).write_bytes(payload)
+
+    monkeypatch.setattr(modifications_manager, "MOD_CACHE_DIR", tmp_path)
+    monkeypatch.setattr(asset_lookup, "download_asset", fake_download)
+
+    manager = ModificationManager.__new__(ModificationManager)
+    manager._cache_scraper = None
+
+    assert manager._fetch_asset("123456") == payload
+    assert calls == ["123456"]
+    assert (tmp_path / "123456.bin").read_bytes() == payload
+
+
 def test_ktx_backed_targets_convert_image_replacements_to_ktx2(monkeypatch, tmp_path):
     monkeypatch.setattr(modifications_manager, "MOD_CACHE_DIR", tmp_path)
     monkeypatch.setattr(
