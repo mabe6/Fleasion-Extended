@@ -117,6 +117,7 @@ def test_cache_slots_view_has_preview_and_type_status_filters(monkeypatch, tmp_p
         assert not widget.asset_lookup_button.isEnabled()
         assert widget.stop_preview_button.isHidden()
         assert widget.kind_filter_combo.findData('ktx') >= 0
+        assert widget.kind_filter_combo.findData('csgphs') >= 0
         for exact_kind in (
             'png', 'jpg', 'bmp', 'gif', 'webp', 'tiff', 'ico', 'dds',
             'psd', 'rbxm', 'xml', 'curve-anim', 'ogg', 'mp3',
@@ -148,9 +149,11 @@ def test_cache_slots_view_has_preview_and_type_status_filters(monkeypatch, tmp_p
         assert preview_calls[-1] == 'a' * 32
         widget._stop_preview()
         assert widget.stop_preview_button.isHidden()
+        assert widget.preview_panel.isHidden()
         row_item = widget.table.item(0, 0)
         widget._cache_entry_clicked(row_item)
         assert not widget.stop_preview_button.isHidden()
+        assert not widget.preview_panel.isHidden()
         assert preview_calls[-1] == 'a' * 32
 
         widget.kind_filter_combo.setCurrentIndex(widget.kind_filter_combo.findData('ktx'))
