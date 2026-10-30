@@ -1673,7 +1673,7 @@ class RobloxCacheTab(QWidget):
 
                 try:
                     pretty_xml = xml.dom.minidom.parseString(payload).toprettyxml(indent='  ')
-                    pretty_xml = '\\n'.join(
+                    pretty_xml = '\n'.join(
                         line for line in pretty_xml.splitlines() if line.strip()
                     )
                 except Exception:
