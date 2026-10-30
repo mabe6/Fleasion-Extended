@@ -753,20 +753,10 @@ class ReplacerConfigWindow(QDialog):
         self.tab_widget = QTabWidget()
         self._registered_module_interceptors = []
 
-        # Local DB remains a distinct, visible workflow. Its implementation uses
-        # the fork's local store and does not depend on the retired HTTP scraper.
-        from .local_database_editor import LocalDatabaseEditorWidget
+        # Replacer is the main workflow. The legacy Asset-ID editor and the
+        # new local cache-hash editor have separate config stores.
         from .roblox_cache_tab import RobloxCacheTab
 
-        self._roblox_cache_tab = RobloxCacheTab(
-            self,
-            config_manager=self.config_manager,
-            view_mode='swaps',
-        )
-        self._local_db_tab = self._roblox_cache_tab
-        self.tab_widget.addTab(self._local_db_tab, 'Local DB')
-
-        # Replacer stays a separate top-level screen, as in upstream Fleasion.
         self._replacer_tab = self._create_replacer_tab()
         self.tab_widget.addTab(
             self._replacer_tab,
@@ -800,7 +790,6 @@ class ReplacerConfigWindow(QDialog):
 
         from .rando_stuff_tab import RandoStuffTab
         from .subplace_joiner_tab import SubplaceJoinerTab
-        from .proxy_tab import ProxyTrafficTab
 
         self._rando_stuff_tab = RandoStuffTab(
             self,
@@ -832,15 +821,6 @@ class ReplacerConfigWindow(QDialog):
             self.proxy_master.register_module_interceptor(self._rando_stuff_tab)
             self._registered_module_interceptors.append(self._rando_stuff_tab)
 
-        self._proxy_traffic_tab = ProxyTrafficTab(
-            config_manager=self.config_manager,
-            proxy_master=self.proxy_master,
-        )
-        self.tab_widget.addTab(
-            self._env_proxy_required(self._proxy_traffic_tab),
-            tr('ui.gui.replacer_config.proxy'),
-        )
-
         from .settings_tab import SettingsTab
 
         self._settings_tab = SettingsTab(
@@ -859,6 +839,8 @@ class ReplacerConfigWindow(QDialog):
             tr('ui.gui.replacer_config.settings'),
         )
 
+        from .local_database_editor import LocalDatabaseEditorWidget
+
         self._advanced_sql_tab = LocalDatabaseEditorWidget(
             self,
             embedded=True,
@@ -867,7 +849,7 @@ class ReplacerConfigWindow(QDialog):
         self._sqlite_browser_tab = self._advanced_sql_tab
         self.tab_widget.addTab(self._advanced_sql_tab, 'Advanced SQL')
 
-        self.tab_widget.setCurrentWidget(self._local_db_tab)
+        self.tab_widget.setCurrentWidget(self._replacer_tab)
         main_layout.addWidget(self.tab_widget)
         self.setLayout(main_layout)
 
@@ -925,9 +907,18 @@ class ReplacerConfigWindow(QDialog):
         self.refresh_env_proxy_gate()
 
     def _create_replacer_tab(self):
-        """Create the replacer configuration tab."""
+        """Create legacy Asset-ID and local cache-hash replacement workflows."""
         replacer_widget = QWidget()
-        replacer_layout = QVBoxLayout()
+        outer_layout = QVBoxLayout(replacer_widget)
+        outer_layout.setContentsMargins(0, 0, 0, 0)
+
+        modes = QTabWidget()
+        self._replacer_modes = modes
+
+        # Keep the existing ID-based UI and config directory intact for
+        # backward compatibility. Only this legacy page depends on proxy mode.
+        self._asset_id_replacer_tab = QWidget()
+        replacer_layout = QVBoxLayout(self._asset_id_replacer_tab)
         replacer_layout.setContentsMargins(0, 0, 0, 0)
 
         top_section_widget = QWidget()
@@ -935,22 +926,23 @@ class ReplacerConfigWindow(QDialog):
         top_section_layout.setContentsMargins(0, 0, 0, 0)
         top_section_layout.setSpacing(6)
 
-        # Config selector section
         self._create_config_section(top_section_layout)
-
-        # Rules tree section
         self._create_tree_section(top_section_layout)
-
         self._replacer_top_proxy_gate = self._proxy_required(top_section_widget)
         replacer_layout.addWidget(self._replacer_top_proxy_gate)
-
-        # Edit section
         self._create_edit_section(replacer_layout)
-
-        # Footer
         self._create_footer(replacer_layout)
 
-        replacer_widget.setLayout(replacer_layout)
+        modes.addTab(self._asset_id_replacer_tab, 'Asset ID (legacy)')
+
+        # Hash profiles and their imported source library are completely
+        # separate from the legacy configs/ folder and need no HTTP proxy.
+        from .hash_replacer_tab import HashReplacerTab
+
+        self._hash_replacer_tab = HashReplacerTab(self)
+        modes.addTab(self._hash_replacer_tab, 'Cache Hash')
+
+        outer_layout.addWidget(modes)
         return replacer_widget
 
     def _create_cache_tab(self):
