@@ -53,6 +53,7 @@ from .utils import (
     is_studio_running,
     launch_as_standard_user,
     log_buffer,
+    setup_logging,
     open_folder,
     run_in_thread,
     start_update_check,
@@ -4147,6 +4148,7 @@ def main():
         sys.exit(0)
 
     _suppress_dashboard = _args.no_dashboard
+    setup_logging()
     log_buffer.log('App', f'Version {__version__}')
 
     # Frozen GUI builds do not have a useful console for Qt's native warnings.
