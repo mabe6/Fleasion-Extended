@@ -25,12 +25,13 @@ class _FakeResponse:
         chunks: tuple[bytes, ...] = (),
         url: str = 'https://assetdelivery.roblox.com/v2/assetId/12345',
         headers: dict[str, str] | None = None,
+        status_code: int = 200,
     ):
         self._body = body or {}
         self._chunks = chunks
         self.url = url
         self.headers = headers or {'Content-Type': 'application/octet-stream'}
-        self.status_code = 200
+        self.status_code = status_code
         self.closed = False
 
     def json(self) -> dict[str, Any]:
@@ -154,6 +155,42 @@ def test_download_refuses_untrusted_signed_location(tmp_path: Path) -> None:
 
     with pytest.raises(AssetLookupError, match='unexpected download host'):
         download_asset('12345', tmp_path / 'asset.bin', session=cast(requests.Session, session))
+
+
+
+def test_open_cloud_key_is_not_forwarded_to_cdn_redirect(tmp_path: Path) -> None:
+    redirect = _FakeResponse(
+        headers={
+            'Location': 'https://cdn.rbxcdn.com/assets/12345.bin',
+            'Content-Type': 'text/plain',
+        },
+        status_code=302,
+    )
+    payload = b'protected asset bytes'
+    final = _FakeResponse(
+        chunks=(payload,),
+        url='https://cdn.rbxcdn.com/assets/12345.bin',
+    )
+    session = _FakeSession(
+        get_responses=[redirect, final],
+        post_response=_FakeResponse(),
+    )
+
+    result = download_asset(
+        '12345',
+        tmp_path / 'protected.bin',
+        api_key='secret-test-key',
+        session=cast(requests.Session, session),
+    )
+
+    assert result.path.read_bytes() == payload
+    assert session.get_calls[0][1]['headers']['x-api-key'] == 'secret-test-key'
+    assert session.get_calls[0][1]['allow_redirects'] is False
+    assert session.get_calls[1][1]['headers'] == {
+        'User-Agent': 'Fleasion/2.x (Roblox asset lookup)'
+    }
+    assert 'x-api-key' not in session.get_calls[1][1]['headers']
+
 
 
 def test_download_uses_open_cloud_endpoint_when_key_is_supplied(tmp_path: Path) -> None:

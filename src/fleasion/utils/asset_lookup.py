@@ -9,7 +9,7 @@ import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlparse
+from urllib.parse import urljoin, urlparse
 
 import requests
 
@@ -218,6 +218,35 @@ def _extract_asset_location(response: requests.Response) -> str:
     return str(location) if location else ''
 
 
+def _get_asset_response(
+    session: requests.Session,
+    url: str,
+    headers: dict[str, str],
+) -> requests.Response:
+    """Follow only Roblox-owned redirects and drop credentials after the first request."""
+    current_url = url
+    current_headers = dict(headers)
+    for _attempt in range(5):
+        response = session.get(
+            current_url,
+            headers=current_headers,
+            timeout=(10, 60),
+            stream=True,
+            allow_redirects=False,
+        )
+        if response.status_code not in {301, 302, 303, 307, 308}:
+            return response
+        redirect = urljoin(current_url, response.headers.get('Location', ''))
+        response.close()
+        if not redirect or not _trusted_asset_url(redirect):
+            raise AssetLookupError(
+                'Roblox redirected the download to an unexpected host; download stopped.'
+            )
+        current_url = redirect
+        current_headers = {'User-Agent': _USER_AGENT}
+    raise AssetLookupError('Roblox returned too many redirects while downloading the asset.')
+
+
 def download_asset(
     value: str,
     destination: str | Path,
@@ -244,13 +273,7 @@ def download_asset(
     response: requests.Response | None = None
     temporary_path: Path | None = None
     try:
-        response = client.get(
-            endpoint,
-            headers=headers,
-            timeout=(10, 60),
-            stream=True,
-            allow_redirects=True,
-        )
+        response = _get_asset_response(client, endpoint, headers)
         if response.status_code in {401, 403}:
             raise AssetLookupError(
                 'Roblox denied access to this asset. It may be private or restricted. '
@@ -263,12 +286,10 @@ def download_asset(
             response.close()
             if not _trusted_asset_url(location):
                 raise AssetLookupError('Roblox returned an unexpected download host; download stopped.')
-            response = client.get(
+            response = _get_asset_response(
+                client,
                 location,
-                headers={'User-Agent': _USER_AGENT},
-                timeout=(10, 60),
-                stream=True,
-                allow_redirects=True,
+                {'User-Agent': _USER_AGENT},
             )
             response.raise_for_status()
 
