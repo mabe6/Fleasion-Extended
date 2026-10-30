@@ -45,6 +45,7 @@ from ..database.roblox_cache_store import (
     detect_roblox_payload_kind,
     decompress_roblox_payload_file,
     extract_cached_http_response_asset_payload,
+    format_csgphs_preview,
     format_cached_http_response_preview,
     split_rbxh_entry,
 )
@@ -1096,6 +1097,9 @@ class RobloxCacheTab(QWidget):
                 )
                 self.preview_stack.setCurrentWidget(self.preview_info)
                 self._track_decoder_worker('_image_loader', image_loader)
+            elif kind == 'csgphs':
+                self.preview_text.setPlainText(format_csgphs_preview(payload))
+                self.preview_stack.setCurrentWidget(self.preview_text)
             elif kind == 'mesh':
                 from ..cache.cache_viewer import MeshLoaderThread
 
