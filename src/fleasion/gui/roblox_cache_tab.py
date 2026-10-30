@@ -222,7 +222,7 @@ class RobloxCacheTab(QWidget):
         )
         self._build_ui()
         if additional_tab is not None:
-            self.pages.addTab(additional_tab, 'Asset Database')
+            self.pages.addTab(additional_tab, 'SQLite Browser')
         self._render_active_swaps()
         app = QApplication.instance()
         if app is not None:
@@ -1385,7 +1385,7 @@ class RobloxCacheTab(QWidget):
                 self.swap_empty_label.setText('No swaps match the selected filters. Clear Search or choose All swaps.')
             else:
                 self.swap_empty_label.setText(
-                    'No saved swaps yet. Use Cache Slots to browse every local entry, then choose a target and replacement ID.'
+                    'No saved swaps yet. Use Asset Explorer to browse every local entry, then choose a target and replacement ID.'
                 )
 
     def refresh(self) -> None:
