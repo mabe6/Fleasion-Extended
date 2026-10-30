@@ -294,6 +294,51 @@ class HashReplacerStore:
             record["import_errors"] = errors
         return imported
 
+    def import_asset_id(self, asset_id: str) -> dict:
+        """Download a Roblox asset by numeric ID and add it to the local hash library."""
+        value = str(asset_id or "").strip()
+        if not re.fullmatch(r"[1-9][0-9]{0,19}", value):
+            raise HashReplacerError("Enter a numeric Roblox Asset ID.")
+
+        from ..utils.asset_lookup import AssetLookupError, download_asset
+        from ..utils.roblox_auth import get_roblosecurity
+        import requests
+
+        self.assets_dir.mkdir(parents=True, exist_ok=True)
+        temporary = self.assets_dir / f".asset-{value}.download"
+        session = requests.Session()
+        session.trust_env = False
+        session.headers.update({"User-Agent": "Mozilla/5.0"})
+        try:
+            try:
+                cookie = get_roblosecurity()
+            except Exception:
+                cookie = None
+            if cookie:
+                session.headers["Cookie"] = f".ROBLOSECURITY={cookie}"
+            try:
+                download_asset(value, temporary, session=session)
+                imported = self.import_paths([temporary])
+            except AssetLookupError as exc:
+                raise HashReplacerError(
+                    f"Could not download Roblox asset {value}: {exc}"
+                ) from exc
+            if not imported:
+                raise HashReplacerError(f"Roblox asset {value} produced no importable file.")
+            digest = str(imported[0]["sha256"])
+            index = self._load_index()
+            record = index["assets"].get(digest, {})
+            if isinstance(record, dict):
+                record["asset_id"] = value
+                record["name"] = f"Roblox Asset {value}"
+                index["assets"][digest] = record
+                self._save_index(index)
+                imported[0] = {**record, "sha256": digest, "path": self.asset_path(digest)}
+            return imported[0]
+        finally:
+            session.close()
+            temporary.unlink(missing_ok=True)
+
     def list_assets(self) -> list[dict]:
         records = self._load_index()["assets"]
         result = []
