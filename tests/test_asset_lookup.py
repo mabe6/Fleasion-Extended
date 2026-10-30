@@ -207,3 +207,31 @@ def test_cache_cdn_probe_reads_asset_response_headers_without_body() -> None:
     assert metadata['asset_version'] == '12'
     assert metadata['asset_type_label'] == 'Image (ID 1)'
     assert metadata['uncompressed_size'] == '4096'
+
+
+def test_asset_metadata_preview_includes_resolved_fields_and_cdn_compression_headers() -> None:
+    preview = format_asset_metadata_preview(
+        (
+            b"roblox-assettypeid: 4\r\n"
+            b"roblox-assetversionnumber: 12\r\n"
+            b"content-type: application/octet-stream\r\n"
+            b"content-encoding: zstd\r\n"
+            b"x-rbx-uncompressed-size-bytes: 4096\r\n"
+        ),
+        resolved_metadata={
+            "asset_id": "987654",
+            "name": "Example mesh",
+            "creator_name": "Example creator",
+            "cdn_probe_status": "HTTP 200",
+        },
+        source_url="https://fts.rbxcdn.com/v2/sc2/" + "a" * 32 + "?__token__=secret",
+    )
+
+    assert "Asset type: Mesh (ID 4)" in preview
+    assert "Roblox Asset ID: 987654" in preview
+    assert "Name: Example mesh" in preview
+    assert "Creator: Example creator" in preview
+    assert "Compression: Zstandard (Zstd)" in preview
+    assert "Uncompressed size: 4096" in preview
+    assert "CDN content hash: " + "a" * 32 in preview
+    assert "__token__" not in preview
