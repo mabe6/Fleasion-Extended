@@ -1199,7 +1199,7 @@ class RobloxCacheTab(QWidget):
             )
             values = [
                 entry.entry_id,
-                entry.asset_id or self._cache_metadata.get(entry.entry_id, {}).get('asset_id') or '—',
+                entry.asset_id or self._entry_metadata(entry).get('asset_id') or '—',
                 entry.kind,
                 _format_size(entry.file_size),
                 _format_size(entry.database_size),
@@ -1547,7 +1547,10 @@ class RobloxCacheTab(QWidget):
                 from ..utils.asset_lookup import format_asset_metadata_preview
 
                 self.preview_text.setPlainText(
-                    format_asset_metadata_preview(payload, asset_id=entry.asset_id or '')
+                    format_asset_metadata_preview(
+                        payload,
+                        asset_id=entry.asset_id or str(self._entry_metadata(entry).get('asset_id') or ''),
+                    )
                 )
                 self.preview_stack.setCurrentWidget(self.preview_text)
             elif kind in {'roblox-settings', 'video-metadata', 'video-manifest', 'http-response'}:
