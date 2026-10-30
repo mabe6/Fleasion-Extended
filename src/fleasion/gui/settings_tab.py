@@ -327,14 +327,14 @@ class SettingsTab(QWidget):
 
         probe_enabled = bool(settings.get('show_cache_probe_header', False))
         self._probe_header_tools_chk = QCheckBox(
-            'Show Probe Header button and output in Cache Slots'
+            'Show Probe Header button and output in Asset Explorer'
         )
         self._probe_header_tools_chk.setChecked(probe_enabled)
         self._probe_header_tools_chk.toggled.connect(self._on_probe_header_tools_toggled)
         section.add_widget(self._probe_header_tools_chk)
 
         self._asset_database_preview_chk = QCheckBox(
-            'Show preview panel in Asset Database'
+            'Show preview panel in Asset Explorer'
         )
         self._asset_database_preview_chk.setChecked(
             bool(settings.get('asset_database_preview_enabled', True))
