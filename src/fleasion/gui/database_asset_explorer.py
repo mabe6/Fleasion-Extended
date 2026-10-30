@@ -44,6 +44,7 @@ from PyQt6.QtWidgets import (
 from ..database.roblox_cache_store import (
     RobloxCacheStore,
     decompress_roblox_payload,
+    decompress_roblox_payload_file,
     detect_roblox_payload_kind,
     split_rbxh_entry,
 )
@@ -426,20 +427,27 @@ class _AssetPreviewWorker(QThread):
             if self.isInterruptionRequested():
                 return
             store = RobloxCacheStore(self.database_path.parent)
-            data, _storage_mode = store._get_entry_data(self.entry_id)
-            _url, payload, _has_header = split_rbxh_entry(data)
-            del data
-            if self.isInterruptionRequested():
-                return
-            payload = decompress_roblox_payload(payload)
-            if self.isInterruptionRequested():
-                return
-            kind = detect_roblox_payload_kind(payload)
-            if kind == 'xml' and b'CurveAnimation' in payload:
-                kind = 'curve-anim'
-            elif kind == 'xml' and b'KeyframeSequence' in payload:
-                kind = 'anim'
-            self.payload_ready.emit(self.entry_id, payload, kind)
+            with tempfile.TemporaryDirectory(prefix='fleasion-asset-preview-') as folder:
+                raw_path = Path(folder) / 'payload.raw'
+                decoded_path = Path(folder) / 'payload.decoded'
+                store.copy_entry_payload_to_file(self.entry_id, raw_path)
+                if self.isInterruptionRequested():
+                    return
+                decompress_roblox_payload_file(raw_path, decoded_path)
+                if self.isInterruptionRequested():
+                    return
+                with decoded_path.open('rb') as handle:
+                    prefix = handle.read(8192)
+                kind = detect_roblox_payload_kind(prefix)
+                # Animation names may appear after the RBXM/XML signature.
+                payload = decoded_path.read_bytes()
+                if kind == 'xml' and b'CurveAnimation' in payload:
+                    kind = 'curve-anim'
+                elif kind == 'xml' and b'KeyframeSequence' in payload:
+                    kind = 'anim'
+                if self.isInterruptionRequested():
+                    return
+                self.payload_ready.emit(self.entry_id, payload, kind)
         except Exception as exc:
             if not self.isInterruptionRequested():
                 self.preview_failed.emit(
