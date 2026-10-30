@@ -105,6 +105,7 @@ class AssetLookupDialog(QDialog):
         input_row = QHBoxLayout()
         self.asset_id_edit = QLineEdit(self._asset_id)
         self.asset_id_edit.setPlaceholderText('Numeric Asset ID')
+        self.asset_id_edit.textChanged.connect(self._update_id_download_button)
         self.asset_id_edit.returnPressed.connect(self._start_id_lookup)
         input_row.addWidget(self.asset_id_edit, 1)
         self.lookup_button = QPushButton('Look up ID')
@@ -138,10 +139,18 @@ class AssetLookupDialog(QDialog):
     def _set_busy(self, busy: bool) -> None:
         self.lookup_button.setEnabled(not busy)
         self.download_cached_button.setEnabled(bool(self._source_url) and not busy)
-        self.download_id_button.setEnabled(
-            bool(self._asset_id or self.asset_id_edit.text().strip().isdigit()) and not busy
-        )
+        self._update_id_download_button(busy=busy)
         self.open_browser_button.setEnabled(bool(self._metadata.get('asset_url')) and not busy)
+
+    def _update_id_download_button(self, *_args, busy: bool | None = None) -> None:
+        worker_busy = (
+            self._worker is not None and self._worker.isRunning()
+            if busy is None else busy
+        )
+        has_asset_id = bool(
+            self._asset_id or self.asset_id_edit.text().strip().isdigit()
+        )
+        self.download_id_button.setEnabled(has_asset_id and not worker_busy)
 
     def _start_task(self, name: str, task: Callable[[], object], message: str) -> None:
         if self._worker is not None and self._worker.isRunning():
