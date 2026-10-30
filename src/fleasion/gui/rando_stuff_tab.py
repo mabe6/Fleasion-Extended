@@ -594,10 +594,11 @@ class RandoStuffTab(QWidget):
     _PRIVATE_GAME_ENDPOINT = '/v1/join-private-game'
     _RESERVED_GAME_ENDPOINT = '/v1/join-reserved-game'
 
-    def __init__(self, parent=None, config_manager=None, proxy_master=None):
+    def __init__(self, parent=None, config_manager=None, proxy_master=None, hash_asset_store=None):
         super().__init__(parent)
         self._config = config_manager
         self._proxy_master = proxy_master
+        self._hash_asset_store = hash_asset_store
         self._qt_destroyed = False
         self.destroyed.connect(self._on_qt_destroyed)
         self._invoker = _Invoker(self)
@@ -906,7 +907,13 @@ class RandoStuffTab(QWidget):
         root.setSpacing(10)
 
         # Imported source files are staged for the independent cache-hash Replacer.
-        self._hash_asset_store = HashReplacerStore()
+        if self._hash_asset_store is None:
+            hash_root = (
+                Path(self._config.configs_folder).parent / "HashReplacer"
+                if self._config is not None and hasattr(self._config, "configs_folder")
+                else None
+            )
+            self._hash_asset_store = HashReplacerStore(root=hash_root)
         self._hash_assets_section = CollapsibleSection(
             "Hash Replacer Assets",
             expanded=True,
