@@ -31,7 +31,6 @@ MAX_IMPORT_BYTES = 100_000_000
 MAX_ENTRY_READ_BYTES = 500_000_000
 _ZSTD_MAGIC = b'\x28\xb5\x2f\xfd'
 _GZIP_MAGIC = b'\x1f\x8b'
-_DEFAULT_PREVIEW_DECOMPRESSED_BYTES = 50 * 1024 * 1024
 
 
 class RobloxCacheError(Exception):
@@ -68,10 +67,10 @@ def decompress_roblox_payload_prefix(
 def decompress_roblox_payload(
     payload: bytes,
     *,
-    max_output_bytes: int = _DEFAULT_PREVIEW_DECOMPRESSED_BYTES,
+    max_output_bytes: int | None = None,
 ) -> bytes:
-    """Decode a compressed cache payload with a hard output limit for safe previews."""
-    if max_output_bytes < 0:
+    """Decode gzip/Zstandard content on demand, optionally enforcing a caller limit."""
+    if max_output_bytes is not None and max_output_bytes < 0:
         raise ValueError('max_output_bytes must be non-negative')
     if not payload.startswith((_GZIP_MAGIC, _ZSTD_MAGIC)):
         return payload
@@ -80,18 +79,18 @@ def decompress_roblox_payload(
     try:
         if encoding == 'gzip':
             with gzip.GzipFile(fileobj=io.BytesIO(payload), mode='rb') as reader:
-                decoded = reader.read(max_output_bytes + 1)
+                decoded = reader.read() if max_output_bytes is None else reader.read(max_output_bytes + 1)
         else:
             import zstandard
 
             with zstandard.ZstdDecompressor().stream_reader(io.BytesIO(payload)) as reader:
-                decoded = reader.read(max_output_bytes + 1)
+                decoded = reader.read() if max_output_bytes is None else reader.read(max_output_bytes + 1)
     except Exception as exc:
         raise RobloxCacheError(f'Could not decompress {encoding} payload: {exc}') from exc
 
-    if len(decoded) > max_output_bytes:
+    if max_output_bytes is not None and len(decoded) > max_output_bytes:
         raise RobloxCacheError(
-            f'Decompressed payload exceeds the {max_output_bytes:,}-byte preview limit.'
+            f'Decompressed payload exceeds the {max_output_bytes:,}-byte limit.'
         )
     return decoded
 
@@ -370,6 +369,42 @@ class RobloxCacheStore:
         except (SQLiteBrowserError, sqlite3.Error) as exc:
             raise RobloxCacheError(f'Could not scan the Roblox files table:\\n{exc}') from exc
 
+    def _iter_database_scan_records(self):
+        """Yield cache metadata and a short BLOB prefix without loading full assets."""
+        browser = SQLiteBrowser(self.database_path)
+        try:
+            columns, _ddl, _kind = browser.schema('files')
+            names = {str(column['name']) for column in columns}
+            select = ['id', 'size']
+            if 'content' in names:
+                select.extend([
+                    'length(content) AS content_size',
+                    'substr(content, 1, ?) AS content_prefix',
+                ])
+            else:
+                select.extend(['NULL AS content_size', 'NULL AS content_prefix'])
+            select.append('atime' if 'atime' in names else '0 AS atime')
+            params = (ENTRY_HEAD_READ,) if 'content' in names else ()
+            with contextlib.closing(browser.connect_readonly()) as connection:
+                cursor = connection.execute(f"SELECT {', '.join(select)} FROM files", params)
+                for row in cursor:
+                    ident = row['id']
+                    if isinstance(ident, memoryview):
+                        ident = ident.tobytes()
+                    if not isinstance(ident, bytes) or len(ident) != 16:
+                        continue
+                    prefix = row['content_prefix']
+                    if isinstance(prefix, memoryview):
+                        prefix = prefix.tobytes()
+                    yield ident.hex(), {
+                        'size': row['size'],
+                        'content_size': row['content_size'],
+                        'content_prefix': prefix if isinstance(prefix, bytes) else None,
+                        'atime': row['atime'] or 0,
+                    }
+        except (SQLiteBrowserError, sqlite3.Error) as exc:
+            raise RobloxCacheError(f'Could not scan the Roblox files table:\\n{exc}') from exc
+
     def _get_entry_data(
         self, entry_id: str, record: dict[str, Any] | None = None
     ) -> tuple[bytes, str]:
@@ -457,62 +492,108 @@ class RobloxCacheStore:
         return 'swapped' if len(data) == record.get('swapped_size') else 'reverted'
 
     def scan(self, *, limit: int = 100_000) -> list[RobloxCacheEntry]:
-        """Scan database BLOBs first, then include legacy file-backed cache entries."""
+        """Scan cache metadata and short headers only; payload decoding is deferred to preview."""
         self.validate()
         manifest = self._manifest()
         results: list[RobloxCacheEntry] = []
         seen: set[str] = set()
 
-        def add_entry(entry_id: str, data: bytes, storage_mode: str,
-                      database_size: int | None, modified_at: float) -> None:
+        def add_entry(
+            entry_id: str,
+            prefix: bytes,
+            file_size: int,
+            storage_mode: str,
+            database_size: int | None,
+            modified_at: float,
+        ) -> None:
             if entry_id in seen:
                 return
             seen.add(entry_id)
-            url, payload, has_header = split_rbxh_entry(data[:ENTRY_HEAD_READ])
+            url, payload, has_header = split_rbxh_entry(prefix)
             swap_record = manifest.get(entry_id, {})
             status = ''
             if swap_record:
-                expected_hash = swap_record.get('swapped_sha256')
-                if expected_hash:
-                    status = 'swapped' if hashlib.sha256(data).hexdigest() == expected_hash else 'reverted'
-                else:
-                    status = 'swapped' if len(data) == swap_record.get('swapped_size') else 'reverted'
-            decoded_prefix = decompress_roblox_payload_prefix(payload)
+                expected_size = swap_record.get('swapped_size')
+                if isinstance(expected_size, int):
+                    # Avoid hashing every large cache asset during a metadata-only scan.
+                    status = 'swapped' if file_size == expected_size else 'reverted'
+
+            if payload.startswith(_GZIP_MAGIC):
+                kind = 'compressed'
+                name = ''
+            elif payload.startswith(_ZSTD_MAGIC):
+                kind = 'compressed'
+                name = ''
+            else:
+                kind = detect_roblox_payload_kind(payload)
+                name = _embedded_name(payload)
+
             results.append(RobloxCacheEntry(
                 entry_id=entry_id,
-                file_size=len(data),
+                file_size=file_size,
                 database_size=database_size,
                 modified_at=modified_at,
-                kind=detect_roblox_payload_kind(decoded_prefix),
+                kind=kind,
                 url=url,
                 asset_id=_asset_id_from_url(url),
                 has_rbxh_header=has_header,
                 swap_status=status,
                 storage_mode=storage_mode,
-                name=_embedded_name(decoded_prefix),
+                name=name,
             ))
 
-        for entry_id, record in self._iter_database_records():
-            try:
-                data, storage_mode = self._get_entry_data(entry_id, record)
-            except RobloxCacheError:
-                # Rows with NULL content and no physical entry are metadata-only.
-                continue
-            path = self._entry_path(entry_id)
-            try:
-                modified_at = path.stat().st_mtime if path.is_file() else 0.0
-            except OSError:
-                modified_at = 0.0
+        for entry_id, record in self._iter_database_scan_records():
+            prefix = record.get('content_prefix')
+            content_size = record.get('content_size')
+            storage_mode = 'database'
+            file_size = int(content_size or 0)
+            modified_at = 0.0
+
+            if not isinstance(prefix, bytes):
+                storage_mode = ''
+                for candidate, mode in (
+                    (self._entry_path(entry_id), 'file'),
+                    (self.library_dir / entry_id, 'library'),
+                ):
+                    try:
+                        if candidate.is_file():
+                            stat_result = candidate.stat()
+                            with candidate.open('rb') as handle:
+                                prefix = handle.read(ENTRY_HEAD_READ)
+                            file_size = stat_result.st_size
+                            modified_at = stat_result.st_mtime
+                            storage_mode = mode
+                            break
+                    except OSError:
+                        continue
+                if not storage_mode:
+                    # Rows with NULL content and no physical entry are metadata-only.
+                    continue
+            else:
+                path = self._entry_path(entry_id)
+                try:
+                    if path.is_file():
+                        modified_at = path.stat().st_mtime
+                except OSError:
+                    pass
+
             if modified_at <= 0:
                 atime = record.get('atime') or 0
                 if isinstance(atime, (int, float)) and atime > 0:
                     modified_at = float(atime / 1000 if atime > 10_000_000_000 else atime)
-            add_entry(entry_id, data, storage_mode, record.get('size'), modified_at)
+
+            add_entry(
+                entry_id,
+                prefix,
+                file_size,
+                storage_mode,
+                record.get('size'),
+                modified_at,
+            )
             if len(results) >= limit:
                 break
 
-        # Some older cache versions store payloads as separate files and leave content NULL.
-        # Also retain orphan files so the UI can diagnose entries missing DB metadata.
+        # Include orphaned legacy files using stat + a short header read only.
         if len(results) < limit and self.assets_path.is_dir():
             sizes = self._read_database_sizes()
             for directory, dirnames, filenames in os.walk(self.assets_path, followlinks=False):
@@ -523,12 +604,18 @@ class RobloxCacheStore:
                     path = Path(directory) / filename
                     try:
                         stat_result = path.stat()
-                        if stat_result.st_size > MAX_ENTRY_READ_BYTES:
-                            continue
-                        data = path.read_bytes()
+                        with path.open('rb') as handle:
+                            prefix = handle.read(ENTRY_HEAD_READ)
                     except OSError:
                         continue
-                    add_entry(filename, data, 'file', sizes.get(filename), stat_result.st_mtime)
+                    add_entry(
+                        filename,
+                        prefix,
+                        stat_result.st_size,
+                        'file',
+                        sizes.get(filename),
+                        stat_result.st_mtime,
+                    )
                     if len(results) >= limit:
                         break
                 if len(results) >= limit:
