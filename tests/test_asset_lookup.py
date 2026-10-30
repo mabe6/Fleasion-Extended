@@ -126,7 +126,10 @@ def test_lookup_merges_developer_and_catalog_metadata() -> None:
 
 def test_lookup_reports_when_roblox_has_no_public_metadata() -> None:
     session = _FakeSession(
-        get_responses=[_FakeResponse({'data': []})],
+        get_responses=[
+            _FakeResponse({'data': []}),
+            _FakeResponse({}),
+        ],
         post_response=_FakeResponse({'data': []}),
     )
     with pytest.raises(AssetLookupError, match='did not return public metadata'):
@@ -235,3 +238,64 @@ def test_asset_metadata_preview_includes_resolved_fields_and_cdn_compression_hea
     assert "Uncompressed size: 4096" in preview
     assert "CDN content hash: " + "a" * 32 in preview
     assert "__token__" not in preview
+
+
+
+def test_lookup_uses_legacy_economy_details_as_a_best_effort_fallback() -> None:
+    session = _FakeSession(
+        get_responses=[
+            _FakeResponse({'data': []}),
+            _FakeResponse({
+                'AssetId': 12345,
+                'Name': 'Economy fallback asset',
+                'Description': 'Metadata from the legacy details endpoint.',
+                'AssetTypeId': 4,
+                'Created': '2023-01-02T00:00:00Z',
+                'Updated': '2024-03-04T00:00:00Z',
+                'Creator': {
+                    'Name': 'Fallback creator',
+                    'CreatorType': 'User',
+                    'CreatorTargetId': 42,
+                },
+                'IsForSale': False,
+            }),
+        ],
+        post_response=_FakeResponse({'data': []}),
+    )
+
+    metadata = lookup_asset_metadata('12345', session=cast(requests.Session, session))
+
+    assert metadata['name'] == 'Economy fallback asset'
+    assert metadata['asset_type_id'] == '4'
+    assert metadata['asset_type_label'] == 'Mesh (ID 4)'
+    assert metadata['creator_name'] == 'Fallback creator'
+    assert metadata['creator_id'] == '42'
+    assert metadata['price_status'] == 'Off sale'
+    assert 'Roblox Economy API (legacy fallback)' in metadata['source']
+    assert session.get_calls[-1][0].endswith('/v2/assets/12345/details')
+
+
+def test_cache_header_parser_reads_asset_metadata_json() -> None:
+    from fleasion.utils.asset_lookup import _cache_header_metadata
+
+    metadata = _cache_header_metadata(
+        b'{"AssetId":987654,"AssetTypeId":4,"Name":"Mesh title",'
+        b'"Description":"A mesh","Creator":{"Name":"Creator","Id":42}}'
+    )
+
+    assert metadata['asset_id'] == '987654'
+    assert metadata['asset_type_id'] == '4'
+    assert metadata['asset_type_label'] == 'Mesh (ID 4)'
+    assert metadata['name'] == 'Mesh title'
+    assert metadata['description'] == 'A mesh'
+    assert metadata['creator_name'] == 'Creator'
+    assert metadata['creator_id'] == '42'
+
+
+def test_metadata_preview_uses_encoding_from_cdn_url_when_header_is_absent() -> None:
+    preview = format_asset_metadata_preview(
+        b'roblox-assettypeid: 4\\r\\n',
+        source_url='https://fts.rbxcdn.com/v2/sc2/' + 'a' * 32 + '?encoding=zstd&version=1',
+    )
+
+    assert 'Compression: Zstandard (Zstd)' in preview
