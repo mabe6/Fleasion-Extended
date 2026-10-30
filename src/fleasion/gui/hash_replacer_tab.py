@@ -82,7 +82,7 @@ class HashReplacerTab(QWidget):
         rule_row = QHBoxLayout()
         rule_row.addWidget(QLabel("Target cache hash:"))
         self.target_hash_edit = QLineEdit()
-        self.target_hash_edit.setPlaceholderText("32 hexadecimal characters from Scraper DB")
+        self.target_hash_edit.setPlaceholderText("32-char cache hash")
         rule_row.addWidget(self.target_hash_edit, 2)
 
         rule_row.addWidget(QLabel("Replacement asset:"))
