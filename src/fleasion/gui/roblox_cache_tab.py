@@ -1605,7 +1605,12 @@ class RobloxCacheTab(QWidget):
                     )
                     self.preview_stack.setCurrentWidget(self.preview_info)
             elif kind in {'rbxm', 'xml'} and (
-                payload.startswith(b'<roblox!') or payload.lstrip().startswith((b'<roblox', b'<?xml'))
+                payload.startswith(b'<roblox!')
+                or payload.lstrip().startswith(b'<roblox')
+                or (
+                    payload.lstrip().startswith(b'<?xml')
+                    and b'<roblox' in payload[:2048]
+                )
             ):
                 from ..cache.rbxm_preview import RbxmPreviewWidget
 
@@ -1660,6 +1665,21 @@ class RobloxCacheTab(QWidget):
                         + '\nAnimations in model:\n• ' + '\n• '.join(shown_paths) + suffix
                     )
                 self.preview_stack.setCurrentWidget(self._model_panel)
+            elif kind == 'xml':
+                # Keep non-Roblox XML readable as an XML document instead of
+                # opening an empty Roblox instance tree just because it has an
+                # XML declaration.
+                import xml.dom.minidom
+
+                try:
+                    pretty_xml = xml.dom.minidom.parseString(payload).toprettyxml(indent='  ')
+                    pretty_xml = '\\n'.join(
+                        line for line in pretty_xml.splitlines() if line.strip()
+                    )
+                except Exception:
+                    pretty_xml = payload.decode('utf-8-sig', errors='replace')
+                self.preview_text.setPlainText(pretty_xml[:200_000])
+                self.preview_stack.setCurrentWidget(self.preview_text)
             elif kind == 'json' or payload.lstrip().startswith((b'{', b'[')):
                 try:
                     parsed = json.loads(payload.decode('utf-8-sig'))
