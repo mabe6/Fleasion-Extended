@@ -28,6 +28,7 @@ ASSET_ID_PATTERN = re.compile(r'[?&]id=(\d+)|assetId[=/](\d+)|/asset/(\d+)', re.
 RBXH_META_SIZE = 25
 ENTRY_HEAD_READ = 8192
 MAX_IMPORT_BYTES = 100_000_000
+MAX_ENTRY_READ_BYTES = 500_000_000
 _ZSTD_MAGIC = b'\x28\xb5\x2f\xfd'
 _GZIP_MAGIC = b'\x1f\x8b'
 
