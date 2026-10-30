@@ -1,4 +1,4 @@
-"""Roblox asset metadata lookup and streamed asset downloads."""
+"""Roblox asset metadata lookup for local cache entries and numeric asset IDs."""
 
 from __future__ import annotations
 
@@ -7,6 +7,7 @@ import os
 import re
 import tempfile
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 from urllib.parse import urljoin, urlparse
@@ -16,12 +17,60 @@ import requests
 from .roblox_auth import get_roblosecurity
 
 
-_ASSET_ID_RE = re.compile(r'^[1-9][0-9]{0,19}$')
-_USER_AGENT = 'Fleasion/2.x (Roblox asset lookup)'
+_ASSET_ID_RE = re.compile(
+    r'(?:[?&](?:id|assetId)=|/assetId/|/library/|/assets/)([1-9][0-9]{0,19})',
+    re.IGNORECASE,
+)
+_CDN_HASH_RE = re.compile(r'/(?:v\d+/)?sc\d/([0-9a-f]{32})(?:[/?]|$)', re.IGNORECASE)
+_CACHE_HEADER_RE = re.compile(
+    rb'(?im)^\s*roblox-(assetid|assetversionnumber|assettypeid|asset-recordable)\s*:\s*([^\r\n]+)'
+)
+_ASSET_TYPE_NAMES = {
+    1: 'Image',
+    2: 'TShirt',
+    3: 'Audio',
+    4: 'Mesh',
+    5: 'Lua',
+    8: 'Hat',
+    9: 'Place',
+    10: 'Model',
+    11: 'Shirt',
+    12: 'Pants',
+    13: 'Decal',
+    17: 'Head',
+    18: 'Face',
+    19: 'Gear',
+    21: 'Badge',
+    24: 'Animation',
+    32: 'Package',
+    34: 'GamePass',
+    38: 'Plugin',
+    40: 'MeshPart',
+    41: 'HairAccessory',
+    42: 'FaceAccessory',
+    43: 'NeckAccessory',
+    44: 'ShoulderAccessory',
+    45: 'FrontAccessory',
+    46: 'BackAccessory',
+    47: 'WaistAccessory',
+    48: 'ClimbAnimation',
+    49: 'DeathAnimation',
+    50: 'FallAnimation',
+    51: 'IdleAnimation',
+    52: 'JumpAnimation',
+    53: 'RunAnimation',
+    54: 'SwimAnimation',
+    55: 'WalkAnimation',
+    56: 'PoseAnimation',
+    61: 'EmoteAnimation',
+    62: 'Video',
+    73: 'FontFamily',
+    79: 'DynamicHead',
+}
+_USER_AGENT = 'Fleasion/2.x (Roblox cache asset lookup)'
 _DEVELOP_ASSETS_URL = 'https://develop.roblox.com/v1/assets'
 _CATALOG_DETAILS_URL = 'https://catalog.roblox.com/v1/catalog/items/details'
 _ASSET_DELIVERY_URL = 'https://assetdelivery.roblox.com/v2/assetId/{asset_id}'
-_OPEN_CLOUD_DELIVERY_URL = 'https://apis.roblox.com/asset-delivery-api/v1/assetId/{asset_id}'
 
 
 class AssetLookupError(RuntimeError):
@@ -41,7 +90,7 @@ class AssetDownloadResult:
 def normalize_asset_id(value: str) -> str:
     """Validate and normalize a numeric Roblox asset identifier."""
     asset_id = str(value).strip()
-    if not _ASSET_ID_RE.fullmatch(asset_id):
+    if not re.fullmatch(r'[1-9][0-9]{0,19}', asset_id):
         raise AssetLookupError('Enter a numeric Roblox Asset ID (digits only).')
     return asset_id
 
@@ -74,17 +123,13 @@ def _find_asset_record(body: Any, asset_id: str) -> dict[str, Any] | None:
     if not isinstance(records, list):
         return None
     for record in records:
-        if not isinstance(record, dict):
-            continue
-        if str(record.get('id') or '') == asset_id:
+        if isinstance(record, dict) and str(record.get('id') or '') == asset_id:
             return record
     return None
 
 
 def _metadata_text(value: Any) -> str:
-    if value is None:
-        return ''
-    return str(value).strip()
+    return '' if value is None else str(value).strip()
 
 
 def _metadata_from_develop(body: Any, asset_id: str) -> dict[str, str]:
@@ -129,7 +174,7 @@ def lookup_asset_metadata(
     *,
     session: requests.Session | None = None,
 ) -> dict[str, str]:
-    """Look up an asset through Roblox's developer and catalog metadata APIs."""
+    """Look up a numeric asset ID through public Roblox developer and catalog endpoints."""
     asset_id = normalize_asset_id(value)
     client = session or _new_session()
     owns_session = session is None
@@ -146,8 +191,8 @@ def lookup_asset_metadata(
             )
             response.raise_for_status()
             developed = _metadata_from_develop(response.json(), asset_id)
+            metadata.update({key: value for key, value in developed.items() if value})
             if developed:
-                metadata.update({key: value for key, value in developed.items() if value})
                 sources.append('Roblox developer metadata')
         except (requests.RequestException, ValueError, TypeError) as exc:
             errors.append(f'developer metadata: {type(exc).__name__}')
@@ -160,10 +205,10 @@ def lookup_asset_metadata(
             )
             response.raise_for_status()
             catalog = _metadata_from_catalog(response.json(), asset_id)
+            for key, value in catalog.items():
+                if value:
+                    metadata[key] = value
             if catalog:
-                for key, value in catalog.items():
-                    if value:
-                        metadata[key] = value
                 sources.append('Roblox catalog')
         except (requests.RequestException, ValueError, TypeError) as exc:
             errors.append(f'catalog metadata: {type(exc).__name__}')
@@ -196,6 +241,214 @@ def _trusted_asset_url(url: str) -> bool:
     )
 
 
+def _follow_cdn_redirects(
+    client: requests.Session,
+    url: str,
+    *,
+    method: str,
+    headers: dict[str, str] | None = None,
+    stream: bool = False,
+    timeout: tuple[int, int] = (6, 20),
+) -> requests.Response:
+    if not _trusted_asset_url(url):
+        raise AssetLookupError('The cache URL is not hosted by Roblox; request blocked.')
+    current_url = url
+    current_headers = dict(headers or {})
+    for _attempt in range(5):
+        request = client.head if method == 'HEAD' else client.get
+        response = request(
+            current_url,
+            headers=current_headers,
+            timeout=timeout,
+            stream=stream,
+            allow_redirects=False,
+        )
+        if response.status_code not in {301, 302, 303, 307, 308}:
+            return response
+        redirect = urljoin(current_url, response.headers.get('Location', ''))
+        response.close()
+        if not redirect or not _trusted_asset_url(redirect):
+            raise AssetLookupError('Roblox redirected the request to an unexpected host.')
+        current_url = redirect
+        current_headers = {'User-Agent': _USER_AGENT}
+    raise AssetLookupError('Roblox returned too many redirects.')
+
+
+def _asset_id_from_text(value: str) -> str:
+    match = _ASSET_ID_RE.search(value)
+    return match.group(1) if match else ''
+
+
+def _asset_type_label(value: str) -> str:
+    try:
+        number = int(value)
+    except (TypeError, ValueError):
+        return ''
+    name = _ASSET_TYPE_NAMES.get(number)
+    return f'{name} (ID {number})' if name else f'Unknown type (ID {number})'
+
+
+def _cache_header_metadata(payload: bytes) -> dict[str, str]:
+    metadata: dict[str, str] = {}
+    for raw_key, raw_value in _CACHE_HEADER_RE.findall(payload[:65536]):
+        key = raw_key.decode('ascii', errors='ignore').casefold().replace('-', '_')
+        value = raw_value.decode('ascii', errors='ignore').strip()
+        if key == 'assetid' and value.isdigit():
+            metadata['asset_id'] = value
+        elif key == 'assetversionnumber' and value.isdigit():
+            metadata['asset_version'] = value
+        elif key == 'assettypeid' and value.isdigit():
+            metadata['asset_type_id'] = value
+            metadata['asset_type_label'] = _asset_type_label(value)
+        elif key == 'asset_recordable':
+            metadata['asset_recordable'] = value
+    return metadata
+
+
+def _expiry_from_url(url: str) -> str:
+    match = re.search(r'(?:[?&]|~)Expires=(\d+)|(?:[?&]|~)exp=(\d+)', url, re.IGNORECASE)
+    if match is None:
+        return ''
+    timestamp = next((value for value in match.groups() if value), '')
+    try:
+        return datetime.fromtimestamp(int(timestamp), timezone.utc).isoformat()
+    except (OSError, OverflowError, ValueError):
+        return ''
+
+
+def _probe_cached_url(
+    client: requests.Session,
+    url: str,
+) -> dict[str, str]:
+    """Read asset-identifying HTTP response headers without downloading the body."""
+    if not url:
+        return {}
+    response: requests.Response | None = None
+    try:
+        response = _follow_cdn_redirects(
+            client,
+            url,
+            method='HEAD',
+            headers={'User-Agent': _USER_AGENT},
+        )
+        if response.status_code == 405:
+            response.close()
+            response = _follow_cdn_redirects(
+                client,
+                url,
+                method='GET',
+                headers={'User-Agent': _USER_AGENT, 'Range': 'bytes=0-0'},
+                stream=True,
+            )
+        if response.status_code in {401, 403, 404, 410}:
+            return {
+                'cdn_probe_status': f'HTTP {response.status_code}',
+                'cdn_probe_note': (
+                    'The stored signed CDN URL is expired or no longer accessible.'
+                    if response.status_code in {401, 403, 410}
+                    else 'The cached CDN URL no longer resolves.'
+                ),
+            }
+        response.raise_for_status()
+        headers = {str(key).casefold(): str(value) for key, value in response.headers.items()}
+        result: dict[str, str] = {}
+        header_map = {
+            'roblox-assetid': 'asset_id',
+            'roblox-assetversionnumber': 'asset_version',
+            'roblox-assettypeid': 'asset_type_id',
+            'x-rbx-uncompressed-size-bytes': 'uncompressed_size',
+            'content-type': 'cdn_content_type',
+            'content-length': 'cdn_content_length',
+            'last-modified': 'cdn_last_modified',
+        }
+        for source, target in header_map.items():
+            value = headers.get(source, '').strip()
+            if value:
+                result[target] = value
+        if result.get('asset_type_id'):
+            result['asset_type_label'] = _asset_type_label(result['asset_type_id'])
+        result['cdn_probe_status'] = f'HTTP {response.status_code}'
+        result['cdn_probe_note'] = 'Asset metadata read from the Roblox CDN response headers.'
+        return result
+    except (requests.RequestException, AssetLookupError) as exc:
+        return {
+            'cdn_probe_status': 'Unavailable',
+            'cdn_probe_note': f'CDN header lookup failed: {type(exc).__name__}',
+        }
+    finally:
+        if response is not None:
+            response.close()
+
+
+def inspect_cache_entry(
+    entry_id: str,
+    store: Any,
+    *,
+    session: requests.Session | None = None,
+) -> dict[str, str]:
+    """Inspect one selected cache slot for embedded metadata and CDN response headers."""
+    client = session or _new_session()
+    owns_session = session is None
+    metadata: dict[str, str] = {}
+    source_url = ''
+    try:
+        with tempfile.TemporaryDirectory(prefix='fleasion-cache-asset-info-') as folder:
+            raw_path = Path(folder) / 'payload.raw'
+            source_url, raw_size = store.copy_entry_payload_to_file(entry_id, raw_path)
+            metadata['cache_entry_id'] = entry_id
+            metadata['cache_payload_size'] = str(raw_size)
+            if source_url:
+                match = _CDN_HASH_RE.search(source_url)
+                if match:
+                    metadata['cdn_hash'] = match.group(1).casefold()
+                metadata['cdn_host'] = (urlparse(source_url).hostname or '').casefold()
+                expiry = _expiry_from_url(source_url)
+                if expiry:
+                    metadata['cdn_url_expires_at'] = expiry
+            with raw_path.open('rb') as handle:
+                raw_prefix = handle.read(65536)
+            from ..database.roblox_cache_store import decompress_roblox_payload_prefix
+
+            decoded_prefix = decompress_roblox_payload_prefix(
+                raw_prefix,
+                max_output_bytes=65536,
+            )
+            metadata.update(_cache_header_metadata(decoded_prefix))
+
+        if source_url:
+            probed = _probe_cached_url(client, source_url)
+            for key, value in probed.items():
+                if value and (not metadata.get(key) or key in {'asset_id', 'asset_version', 'asset_type_id'}):
+                    metadata[key] = value
+
+        asset_id = metadata.get('asset_id') or _asset_id_from_text(source_url)
+        if asset_id:
+            metadata['asset_id'] = asset_id
+            try:
+                resolved = lookup_asset_metadata(asset_id, session=client)
+                metadata.update(resolved)
+            except AssetLookupError as exc:
+                metadata['metadata_lookup_note'] = str(exc)
+        else:
+            metadata['metadata_lookup_note'] = (
+                'This cache slot exposes a CDN content hash but no numeric Asset ID. '
+                'Roblox metadata APIs require an Asset ID; the hash alone is not a reversible ID.'
+            )
+
+        metadata['source_url'] = source_url
+        metadata['source'] = 'Local cache payload and Roblox CDN headers'
+        return metadata
+    except Exception as exc:
+        if isinstance(exc, AssetLookupError):
+            raise
+        raise AssetLookupError(
+            f'Could not inspect cache entry {entry_id}: {type(exc).__name__}: {exc}'
+        ) from exc
+    finally:
+        if owns_session:
+            client.close()
+
+
 def _extract_asset_location(response: requests.Response) -> str:
     content_type = response.headers.get('Content-Type', '').casefold()
     content_length = response.headers.get('Content-Length', '')
@@ -223,86 +476,28 @@ def _get_asset_response(
     url: str,
     headers: dict[str, str],
 ) -> requests.Response:
-    """Follow only Roblox-owned redirects and drop credentials after the first request."""
-    current_url = url
-    current_headers = dict(headers)
-    for _attempt in range(5):
-        response = session.get(
-            current_url,
-            headers=current_headers,
-            timeout=(10, 60),
-            stream=True,
-            allow_redirects=False,
-        )
-        if response.status_code not in {301, 302, 303, 307, 308}:
-            return response
-        redirect = urljoin(current_url, response.headers.get('Location', ''))
-        response.close()
-        if not redirect or not _trusted_asset_url(redirect):
-            raise AssetLookupError(
-                'Roblox redirected the download to an unexpected host; download stopped.'
-            )
-        current_url = redirect
-        current_headers = {'User-Agent': _USER_AGENT}
-    raise AssetLookupError('Roblox returned too many redirects while downloading the asset.')
-
-
-def download_asset(
-    value: str,
-    destination: str | Path,
-    *,
-    api_key: str = '',
-    session: requests.Session | None = None,
-) -> AssetDownloadResult:
-    """Download an asset in chunks, preserving the original bytes on disk."""
-    asset_id = normalize_asset_id(value)
-    target = Path(destination).expanduser()
-    if target.exists() and target.is_dir():
-        raise AssetLookupError('Choose a file name, not a directory, for the downloaded asset.')
-    target.parent.mkdir(parents=True, exist_ok=True)
-
-    client = session or _new_session()
-    owns_session = session is None
-    endpoint = (
-        _OPEN_CLOUD_DELIVERY_URL.format(asset_id=asset_id)
-        if api_key.strip()
-        else _ASSET_DELIVERY_URL.format(asset_id=asset_id)
+    return _follow_cdn_redirects(
+        session,
+        url,
+        method='GET',
+        headers=headers,
+        stream=True,
+        timeout=(10, 60),
     )
-    headers = {'x-api-key': api_key.strip()} if api_key.strip() else {}
 
-    response: requests.Response | None = None
-    temporary_path: Path | None = None
+
+def _stream_response_to_file(
+    response: requests.Response,
+    target: Path,
+) -> AssetDownloadResult:
+    descriptor, temporary_name = tempfile.mkstemp(
+        prefix=f'.{target.name}.',
+        suffix='.part',
+        dir=str(target.parent),
+    )
+    os.close(descriptor)
+    temporary_path = Path(temporary_name)
     try:
-        response = _get_asset_response(client, endpoint, headers)
-        if response.status_code in {401, 403}:
-            raise AssetLookupError(
-                'Roblox denied access to this asset. It may be private or restricted. '
-                'Try an Open Cloud API key with Asset Delivery read permission.'
-            )
-        response.raise_for_status()
-
-        location = _extract_asset_location(response)
-        if location:
-            response.close()
-            if not _trusted_asset_url(location):
-                raise AssetLookupError('Roblox returned an unexpected download host; download stopped.')
-            response = _get_asset_response(
-                client,
-                location,
-                {'User-Agent': _USER_AGENT},
-            )
-            response.raise_for_status()
-
-        if not _trusted_asset_url(response.url):
-            raise AssetLookupError('Roblox redirected the download to an unexpected host; download stopped.')
-
-        descriptor, temporary_name = tempfile.mkstemp(
-            prefix=f'.{target.name}.',
-            suffix='.part',
-            dir=str(target.parent),
-        )
-        os.close(descriptor)
-        temporary_path = Path(temporary_name)
         digest = hashlib.sha256()
         size = 0
         with temporary_path.open('wb') as output:
@@ -312,33 +507,114 @@ def download_asset(
                 output.write(chunk)
                 digest.update(chunk)
                 size += len(chunk)
-
         if size == 0:
             raise AssetLookupError('Roblox returned an empty asset; no file was saved.')
         temporary_path.replace(target)
-        temporary_path = None
         return AssetDownloadResult(
             path=target,
             size=size,
             sha256=digest.hexdigest(),
             content_type=response.headers.get('Content-Type', 'application/octet-stream'),
         )
+    finally:
+        temporary_path.unlink(missing_ok=True)
+
+
+def _download_response(
+    response: requests.Response,
+    destination: str | Path,
+) -> AssetDownloadResult:
+    target = Path(destination).expanduser()
+    if target.exists() and target.is_dir():
+        raise AssetLookupError('Choose a file name, not a directory, for the downloaded asset.')
+    if not _trusted_asset_url(response.url):
+        raise AssetLookupError('Roblox redirected the download to an unexpected host.')
+    target.parent.mkdir(parents=True, exist_ok=True)
+    return _stream_response_to_file(response, target)
+
+
+def download_asset(
+    value: str,
+    destination: str | Path,
+    *,
+    session: requests.Session | None = None,
+) -> AssetDownloadResult:
+    """Download an asset using normal Roblox Asset Delivery, without an Open Cloud key."""
+    asset_id = normalize_asset_id(value)
+    client = session or _new_session()
+    owns_session = session is None
+    response: requests.Response | None = None
+    try:
+        response = _get_asset_response(
+            client,
+            _ASSET_DELIVERY_URL.format(asset_id=asset_id),
+            {'User-Agent': _USER_AGENT},
+        )
+        if response.status_code in {401, 403}:
+            raise AssetLookupError(
+                'Roblox denied access to this asset. It may be private, restricted, or unavailable '
+                'through normal Asset Delivery.'
+            )
+        response.raise_for_status()
+        location = _extract_asset_location(response)
+        if location:
+            response.close()
+            response = _get_asset_response(
+                client,
+                location,
+                {'User-Agent': _USER_AGENT},
+            )
+            response.raise_for_status()
+        return _download_response(response, destination)
     except AssetLookupError:
         raise
     except requests.RequestException as exc:
         status = getattr(getattr(exc, 'response', None), 'status_code', None)
         if status in {401, 403}:
             raise AssetLookupError(
-                'Roblox denied access to this asset. It may be private or restricted. '
-                'Try an Open Cloud API key with Asset Delivery read permission.'
+                'Roblox denied access to this asset. It may be private or restricted.'
             ) from exc
-        raise AssetLookupError(f'Roblox asset download failed: {type(exc).__name__}: {exc}') from exc
-    except OSError as exc:
-        raise AssetLookupError(f'Could not save the asset: {exc}') from exc
+        raise AssetLookupError(
+            f'Roblox asset download failed: {type(exc).__name__}: {exc}'
+        ) from exc
     finally:
         if response is not None:
             response.close()
-        if temporary_path is not None:
-            temporary_path.unlink(missing_ok=True)
+        if owns_session:
+            client.close()
+
+
+def download_cached_asset(
+    url: str,
+    destination: str | Path,
+    *,
+    session: requests.Session | None = None,
+) -> AssetDownloadResult:
+    """Download a cached asset through its original signed Roblox CDN URL."""
+    client = session or _new_session()
+    owns_session = session is None
+    response: requests.Response | None = None
+    try:
+        response = _get_asset_response(
+            client,
+            url,
+            {'User-Agent': _USER_AGENT},
+        )
+        if response.status_code in {401, 403, 410}:
+            raise AssetLookupError(
+                'The cached CDN link has expired. Fleasion cannot renew a hash-only signed URL '
+                'without a numeric Asset ID.'
+            )
+        response.raise_for_status()
+        return _download_response(response, destination)
+    except AssetLookupError:
+        raise
+    except requests.RequestException as exc:
+        raise AssetLookupError(
+            f'Cached CDN download failed: {type(exc).__name__}: {exc}'
+        ) from exc
+    finally:
+        if response is not None:
+            response.close()
         if owns_session:
             client.close()
