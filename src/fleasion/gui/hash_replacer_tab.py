@@ -340,11 +340,32 @@ class HashReplacerTab(QWidget):
         target_hash, source_hash = selected
         try:
             source_path = self.asset_store.asset_path(source_hash)
-            message = self.cache_store.import_file(
-                target_hash,
-                source_path,
-                origin=f"Hash Replacer / {self.profile_combo.currentText()}",
-            )
+            origin = f"Hash Replacer / {self.profile_combo.currentText()}"
+            try:
+                message = self.cache_store.import_file(
+                    target_hash,
+                    source_path,
+                    origin=origin,
+                )
+            except RobloxCacheError as exc:
+                if not str(exc).startswith("Import type mismatch:"):
+                    raise
+                answer = QMessageBox.warning(
+                    self,
+                    "Asset type mismatch",
+                    f"{exc}\\n\\nContinue anyway? The selected file will be written unchanged "
+                    "into the target cache slot. It may not load correctly in Roblox.",
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
+                    QMessageBox.StandardButton.Cancel,
+                )
+                if answer != QMessageBox.StandardButton.Yes:
+                    return
+                message = self.cache_store.import_file(
+                    target_hash,
+                    source_path,
+                    origin=origin,
+                    allow_type_mismatch=True,
+                )
         except (HashReplacerError, RobloxCacheError, OSError) as exc:
             QMessageBox.warning(self, "Hash replacement failed", str(exc))
             return
