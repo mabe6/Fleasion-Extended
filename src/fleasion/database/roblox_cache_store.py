@@ -31,6 +31,18 @@ ENTRY_HEAD_READ = 8192
 MAX_IMPORT_BYTES = 100_000_000
 _ZSTD_MAGIC = b'\x28\xb5\x2f\xfd'
 _GZIP_MAGIC = b'\x1f\x8b'
+# Roblox cache payloads can prepend a short fixed-size wrapper before a Zstandard frame.
+# Limit detection to observed wrapper boundaries to avoid false positives in arbitrary binaries.
+_ROBLOX_ZSTD_PREFIX_OFFSETS = (8, 10, 12, 16)
+
+
+def _zstd_frame_offset(payload: bytes) -> int | None:
+    if payload.startswith(_ZSTD_MAGIC):
+        return 0
+    for offset in _ROBLOX_ZSTD_PREFIX_OFFSETS:
+        if payload[offset:offset + len(_ZSTD_MAGIC)] == _ZSTD_MAGIC:
+            return offset
+    return None
 
 
 class RobloxCacheError(Exception):
@@ -52,14 +64,17 @@ def decompress_roblox_payload_prefix(
             )
         except zlib.error:
             return payload
-    if payload.startswith(_ZSTD_MAGIC):
+    zstd_offset = _zstd_frame_offset(payload)
+    if zstd_offset is not None:
         try:
             import zstandard
 
-            with zstandard.ZstdDecompressor().stream_reader(io.BytesIO(payload)) as reader:
+            frame = io.BytesIO(payload[zstd_offset:])
+            with zstandard.ZstdDecompressor().stream_reader(frame) as reader:
                 return reader.read(max_output_bytes)
         except Exception:
-            # Cache scans should remain usable when a frame is truncated or malformed.
+            # Cache scans should remain usable when a frame is truncated or malformed,
+            # or when the content requires a Roblox-specific dictionary.
             return payload
     return payload
 
@@ -72,7 +87,8 @@ def decompress_roblox_payload(
     """Decode gzip/Zstandard content on demand, optionally enforcing a caller limit."""
     if max_output_bytes is not None and max_output_bytes < 0:
         raise ValueError('max_output_bytes must be non-negative')
-    if not payload.startswith((_GZIP_MAGIC, _ZSTD_MAGIC)):
+    zstd_offset = _zstd_frame_offset(payload)
+    if not payload.startswith(_GZIP_MAGIC) and zstd_offset is None:
         return payload
 
     encoding = 'gzip' if payload.startswith(_GZIP_MAGIC) else 'Zstandard'
@@ -83,7 +99,8 @@ def decompress_roblox_payload(
         else:
             import zstandard
 
-            with zstandard.ZstdDecompressor().stream_reader(io.BytesIO(payload)) as reader:
+            frame = io.BytesIO(payload[zstd_offset or 0:])
+            with zstandard.ZstdDecompressor().stream_reader(frame) as reader:
                 decoded = reader.read() if max_output_bytes is None else reader.read(max_output_bytes + 1)
     except Exception as exc:
         raise RobloxCacheError(f'Could not decompress {encoding} payload: {exc}') from exc
@@ -108,14 +125,16 @@ def decompress_roblox_payload_file(
     destination_path = Path(destination)
     try:
         with source_path.open('rb') as reader, destination_path.open('wb') as writer:
-            magic = reader.read(4)
+            prefix = reader.read(16)
             reader.seek(0)
-            if magic == _GZIP_MAGIC:
+            zstd_offset = _zstd_frame_offset(prefix)
+            if prefix.startswith(_GZIP_MAGIC):
                 with gzip.GzipFile(fileobj=reader, mode='rb') as decoded:
                     shutil.copyfileobj(decoded, writer, length=chunk_size)
-            elif magic == _ZSTD_MAGIC:
+            elif zstd_offset is not None:
                 import zstandard
 
+                reader.seek(zstd_offset)
                 with zstandard.ZstdDecompressor().stream_reader(
                     reader, read_size=chunk_size
                 ) as decoded:
@@ -163,10 +182,34 @@ def parse_cached_http_response(payload: bytes) -> tuple[dict[str, str], bytes] |
         'access-control-expose-headers', 'server', 'last-modified',
         'x-rbx-zstd-dict-sha', 'roblox-assettypeid',
     }
-    if len(set(headers).intersection(recognised)) < 2:
+    # Some Roblox responses expose only roblox-assettypeid plus the body separator.
+    # A single recognised header is enough; the body is classified independently below.
+    if not set(headers).intersection(recognised):
         return None
     body = b'' if separator < 0 else payload[body_start:]
     return headers, body
+
+
+_ROBLOX_ASSET_TYPE_NAMES = {
+    '1': 'Image', '2': 'T-Shirt', '3': 'Audio', '4': 'Mesh', '5': 'Lua',
+    '8': 'Hat', '9': 'Place', '10': 'Model', '11': 'Shirt', '12': 'Pants',
+    '13': 'Decal', '17': 'Head', '18': 'Face', '19': 'Gear', '21': 'Badge',
+    '24': 'Animation', '32': 'Package', '34': 'Game Pass', '38': 'Plugin',
+    '40': 'Mesh Part', '41': 'Hair Accessory', '42': 'Face Accessory',
+    '43': 'Neck Accessory', '44': 'Shoulder Accessory', '45': 'Front Accessory',
+    '46': 'Back Accessory', '47': 'Waist Accessory', '48': 'Climb Animation',
+    '49': 'Death Animation', '50': 'Fall Animation', '51': 'Idle Animation',
+    '52': 'Jump Animation', '53': 'Run Animation', '54': 'Swim Animation',
+    '55': 'Walk Animation', '56': 'Pose Animation', '61': 'Emote Animation',
+    '62': 'Video', '73': 'Font Family', '78': 'Mood Animation',
+    '79': 'Dynamic Head', '93': 'Text Document',
+}
+
+
+def roblox_asset_type_name(value: str | int) -> str:
+    """Return a readable Roblox AssetType name, preserving unknown numeric IDs."""
+    key = str(value).strip()
+    return _ROBLOX_ASSET_TYPE_NAMES.get(key, f'Unknown asset type {key}')
 
 
 def format_cached_http_response_preview(payload: bytes, url: str = '') -> str:
@@ -196,12 +239,14 @@ def format_cached_http_response_preview(payload: bytes, url: str = '') -> str:
         ('cache-control', 'Cache control'),
         ('server', 'Server'),
         ('x-rbx-zstd-dict-sha', 'Zstandard dictionary SHA-256'),
-        ('roblox-assettypeid', 'Roblox asset type ID'),
         ('roblox-assetversionnumber', 'Asset version'),
     )
     for key, label in display_headers:
         if headers.get(key):
             lines.append(f'{label}: {headers[key]}')
+    asset_type_id = headers.get('roblox-assettypeid', '').strip()
+    if asset_type_id:
+        lines.append(f'Roblox asset type: {roblox_asset_type_name(asset_type_id)} ({asset_type_id})')
     if body:
         body_kind = detect_roblox_payload_kind(body, url=url)
         lines.extend(('', f'Response body: {len(body):,} bytes · {body_kind}'))
@@ -331,8 +376,14 @@ def detect_roblox_payload_kind(payload: bytes, *, url: str = '') -> str:
             return 'roblox-settings' if (
                 lower_path.endswith('.dcz') or 'settings-compressed/' in lower_path
             ) else 'http-response'
-        if 'mpegurl' in content_type or body.lstrip().startswith(b'#EXTM3U'):
+        if body:
+            body_kind = detect_roblox_payload_kind(body, url=url)
+            if body_kind not in {'other', 'asset-metadata', 'http-response'}:
+                return body_kind
+        if 'mpegurl' in content_type:
             return 'video-manifest'
+        if 'roblox-assettypeid' in headers:
+            return 'asset-metadata'
         return 'http-response'
 
     if payload.lstrip().startswith(b'#EXTM3U'):
@@ -759,10 +810,7 @@ class RobloxCacheStore:
                     # Avoid hashing every large cache asset during a metadata-only scan.
                     status = 'swapped' if file_size == expected_size else 'reverted'
 
-            if payload.startswith(_GZIP_MAGIC):
-                kind = 'compressed'
-                name = ''
-            elif payload.startswith(_ZSTD_MAGIC):
+            if payload.startswith(_GZIP_MAGIC) or _zstd_frame_offset(payload) is not None:
                 kind = 'compressed'
                 name = ''
             else:
