@@ -779,21 +779,35 @@ def load_curve_animation_data(anim_data: bytes) -> List[Keyframe]:
 
 def load_animation_data(anim_data: bytes) -> List[Keyframe]:
     """Load animation from either XML or binary RBXM format."""
-    # CurveAnimation has a distinct structure - try it first
-    if b'CurveAnimation' in anim_data:
+    # Strip UTF-8 BOM for format detection (Roblox Studio emits BOM-prefixed RBXMX).
+    _detect = anim_data[3:] if anim_data[:3] == b'\xef\xbb\xbf' else anim_data
+
+    # CurveAnimation has a distinct structure. In binary RBXM, its class name
+    # may live inside a compressed INST chunk and therefore not appear in a
+    # direct byte search.
+    has_curve_animation = b'CurveAnimation' in anim_data
+    if _detect.startswith(b'<roblox!') and not has_curve_animation:
+        try:
+            from .tools.solidmodel_converter.rbxm.deserializer import RbxmDeserializer
+
+            document = RbxmDeserializer().deserialize(anim_data)
+            has_curve_animation = any(
+                instance.class_name == 'CurveAnimation'
+                for instance in document.instances.values()
+            )
+        except Exception:
+            pass
+
+    if has_curve_animation:
         keys = load_curve_animation_data(anim_data)
         if keys:
             return _fill_sparse_pose_tracks(keys)
 
-    # Strip UTF-8 BOM for format detection (Roblox Studio emits BOM-prefixed RBXMX)
-    _detect = anim_data[3:] if anim_data[:3] == b'\xef\xbb\xbf' else anim_data
-
-    # Try to detect format
     if _detect.startswith(b'<roblox!'):
-        # Binary RBXM format
+        # Binary KeyframeSequence RBXM format.
         keys = load_animation_from_rbxm(anim_data)
     elif _detect.strip().startswith(b'<'):
-        # XML format
+        # XML RBXMX format.
         keys = load_animation_from_xml(anim_data)
     else:
         keys = load_animation_from_xml(anim_data)
