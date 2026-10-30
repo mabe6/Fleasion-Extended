@@ -456,7 +456,6 @@ class DatabaseAssetExplorer(QWidget):
         self.database_path: Path | None = None
         self.items: list[_AssetItem] = []
         self.items_by_id: dict[str, _AssetItem] = {}
-        self._current_payload: bytes | None = None
         self._current_entry_id = ''
         self._current_image: QImage | None = None
         self._current_request_id = ''
@@ -765,7 +764,6 @@ class DatabaseAssetExplorer(QWidget):
         self.database_path = Path(path).expanduser().resolve()
         self.items = []
         self.items_by_id = {}
-        self._current_payload = None
         self._current_entry_id = ''
         self._scan_note = ''
         self.copy_id_button.setEnabled(False)
@@ -1089,7 +1087,6 @@ class DatabaseAssetExplorer(QWidget):
             self.asset_table.selectRow(selected_row)
         else:
             self._current_entry_id = ''
-            self._current_payload = None
             self.copy_id_button.setEnabled(False)
             self.copy_asset_button.setEnabled(False)
             self.export_button.setEnabled(False)
@@ -1248,7 +1245,6 @@ class DatabaseAssetExplorer(QWidget):
 
     def _load_preview(self, item: _AssetItem) -> None:
         self._reset_preview_widgets()
-        self._current_payload = None
         request_id = item.entry_id
         self._current_request_id = request_id
         if self.database_path is None:
@@ -1272,7 +1268,6 @@ class DatabaseAssetExplorer(QWidget):
         item = self.items_by_id.get(request_id)
         if item is None:
             return
-        self._current_payload = payload
         if item.kind == 'compressed':
             item.kind = kind
             row = self.asset_table.currentRow()
@@ -1508,7 +1503,6 @@ class DatabaseAssetExplorer(QWidget):
             self._scale_image()
 
     def _clear_preview(self) -> None:
-        self._current_payload = None
         self._current_image = None
         self.image_preview.clear()
         self.preview_stack.setCurrentWidget(self.info_preview)
