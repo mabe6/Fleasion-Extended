@@ -12,6 +12,7 @@ on:
       - "src/fleasion/gui/rando_stuff_tab.py"
       - "src/fleasion/modifications/manager.py"
       - "tests/test_hash_replacer.py"
+      - "tests/test_legacy_replacer_conversion.py"
       - "tests/test_modifications_manager.py"
       - "tests/test_replacer_config_localization_layout.py"
       - "tests/test_miscellaneous_layout.py"
@@ -122,6 +123,7 @@ jobs:
           src/fleasion/database/sqlite_browser.py
           src/fleasion/database/roblox_cache_store.py
           src/fleasion/database/hash_replacer_store.py
+          src/fleasion/database/legacy_replacer_conversion.py
           src/fleasion/database/animation_payload.py
           src/fleasion/database/animation_convert.py
           src/fleasion/local_database_mode.py
@@ -158,6 +160,7 @@ jobs:
           src/fleasion/gui/asset_lookup_dialog.py
           tests/test_asset_lookup.py
           tests/test_hash_replacer.py
+          tests/test_legacy_replacer_conversion.py
           tests/test_modifications_manager.py
           tests/test_replacer_config_localization_layout.py
           tests/test_miscellaneous_layout.py
@@ -165,4 +168,4 @@ jobs:
           tests/test_local_database_mode.py
 
       - name: Run local database tests
-        run: uv run pytest -q tests/test_sqlite_browser.py tests/test_database_asset_explorer.py tests/test_proxy_tab_visibility.py tests/test_local_database_mode.py tests/test_roblox_cache_store.py tests/test_local_cache_ui.py tests/test_animation_payload.py tests/test_animation_convert.py tests/test_cache_scraper_places.py tests/test_asset_lookup.py tests/test_mesh_processing.py tests/test_local_database_editor_ui.py tests/test_hash_replacer.py tests/test_modifications_manager.py tests/test_replacer_config_localization_layout.py tests/test_miscellaneous_layout.py
+        run: uv run pytest -q tests/test_sqlite_browser.py tests/test_database_asset_explorer.py tests/test_proxy_tab_visibility.py tests/test_local_database_mode.py tests/test_roblox_cache_store.py tests/test_local_cache_ui.py tests/test_animation_payload.py tests/test_animation_convert.py tests/test_cache_scraper_places.py tests/test_asset_lookup.py tests/test_mesh_processing.py tests/test_local_database_editor_ui.py tests/test_hash_replacer.py tests/test_legacy_replacer_conversion.py tests/test_modifications_manager.py tests/test_replacer_config_localization_layout.py tests/test_miscellaneous_layout.py
