@@ -28,7 +28,6 @@ ASSET_ID_PATTERN = re.compile(r'[?&]id=(\d+)|assetId[=/](\d+)|/asset/(\d+)', re.
 RBXH_META_SIZE = 25
 ENTRY_HEAD_READ = 8192
 MAX_IMPORT_BYTES = 100_000_000
-MAX_ENTRY_READ_BYTES = 500_000_000
 _ZSTD_MAGIC = b'\x28\xb5\x2f\xfd'
 _GZIP_MAGIC = b'\x1f\x8b'
 
@@ -755,8 +754,6 @@ class RobloxCacheStore:
         current_db_size = target_record.get('size') if target_record else None
         if not isinstance(current_db_size, int):
             raise RobloxCacheError('Target has no corresponding row in rbx-storage.db.')
-        if len(target_data) > MAX_ENTRY_READ_BYTES:
-            raise RobloxCacheError('Target entry exceeds the configured safety limit.')
         if target_mode == 'database' and current_db_size != len(target_data):
             raise RobloxCacheError(
                 f'The target content BLOB has {len(target_data)} bytes but files.size says {current_db_size}. '
@@ -764,8 +761,6 @@ class RobloxCacheStore:
             )
 
         new_data = self._source_bytes(source_id)
-        if len(new_data) > MAX_ENTRY_READ_BYTES:
-            raise RobloxCacheError('Source entry exceeds the configured safety limit.')
         status = self.swap_status(target_id)
         if self.swap_status(source_id) == 'swapped':
             raise RobloxCacheError('Source is currently swapped itself. Restore its original entry first.')
