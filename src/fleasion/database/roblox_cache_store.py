@@ -494,7 +494,7 @@ class RobloxCacheStore:
                     if not isinstance(first, bytes):
                         first = b''
 
-                    def blob_chunks():
+                    def blob_chunks() -> Any:
                         offset = len(first) + 1
                         while offset <= content_size:
                             chunk = connection.execute(
