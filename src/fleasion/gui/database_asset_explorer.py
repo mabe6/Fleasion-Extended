@@ -42,6 +42,7 @@ from PyQt6.QtWidgets import (
 )
 
 from ..database.roblox_cache_store import (
+    RobloxCacheStore,
     decompress_roblox_payload,
     detect_roblox_payload_kind,
     split_rbxh_entry,
@@ -408,6 +409,44 @@ class _AssetNameResolver(QThread):
         self.names_ready.emit(found, self.asset_ids, failed)
 
 
+
+class _AssetPreviewWorker(QThread):
+    """Read and decompress a selected database asset away from the GUI thread."""
+
+    payload_ready = pyqtSignal(str, bytes, str)
+    preview_failed = pyqtSignal(str, str)
+
+    def __init__(self, database_path: Path, entry_id: str, parent=None):
+        super().__init__(parent)
+        self.database_path = database_path
+        self.entry_id = entry_id
+
+    def run(self) -> None:
+        try:
+            if self.isInterruptionRequested():
+                return
+            store = RobloxCacheStore(self.database_path.parent)
+            data, _storage_mode = store._get_entry_data(self.entry_id)
+            _url, payload, _has_header = split_rbxh_entry(data)
+            del data
+            if self.isInterruptionRequested():
+                return
+            payload = decompress_roblox_payload(payload)
+            if self.isInterruptionRequested():
+                return
+            kind = detect_roblox_payload_kind(payload)
+            if kind == 'xml' and b'CurveAnimation' in payload:
+                kind = 'curve-anim'
+            elif kind == 'xml' and b'KeyframeSequence' in payload:
+                kind = 'anim'
+            self.payload_ready.emit(self.entry_id, payload, kind)
+        except Exception as exc:
+            if not self.isInterruptionRequested():
+                self.preview_failed.emit(
+                    self.entry_id, f'{type(exc).__name__}: {exc}'
+                )
+
+
 class DatabaseAssetExplorer(QWidget):
     """Scraper-style visual browser for Roblox cache entries (content BLOBs or rbx-storage files)."""
 
@@ -421,6 +460,7 @@ class DatabaseAssetExplorer(QWidget):
         self._current_entry_id = ''
         self._current_image: QImage | None = None
         self._current_request_id = ''
+        self._preview_workers: set[_AssetPreviewWorker] = set()
         self._preview_enabled = bool(self._settings().get('asset_database_preview_enabled', True))
         self._page_offset = 0
         self._scan_note = ''
@@ -1160,6 +1200,7 @@ class DatabaseAssetExplorer(QWidget):
         setattr(self, attribute, None)
 
     def _reset_preview_widgets(self) -> None:
+        self._current_request_id = ''
         self._stop_loader('_image_loader')
         self._stop_loader('_mesh_loader')
 
@@ -1210,27 +1251,36 @@ class DatabaseAssetExplorer(QWidget):
         self._current_payload = None
         request_id = item.entry_id
         self._current_request_id = request_id
-        try:
-            if self.database_path is None:
-                return
-            data = self._read_entry_bytes(item.entry_id)
-            _url, payload, _has_header = split_rbxh_entry(data)
-            # Keep the raw cached bytes for Export; only decode a copy for previewing.
-            self._current_payload = payload
-            # The entry is decoded only after selection; keep raw bytes available for Export.
-            payload = decompress_roblox_payload(payload)
-            if item.kind == 'compressed':
-                item.kind = detect_roblox_payload_kind(payload)
-                if item.kind == 'xml' and b'CurveAnimation' in payload:
-                    item.kind = 'curve-anim'
-                elif item.kind == 'xml' and b'KeyframeSequence' in payload:
-                    item.kind = 'anim'
-                row = self.asset_table.currentRow()
-                if row >= 0 and self.asset_table.item(row, 4) is not None:
-                    self.asset_table.item(row, 4).setText(
-                        _KIND_LABELS.get(item.kind, item.kind.upper())
-                    )
+        if self.database_path is None:
+            return
+        self._show_info('Reading cache entry and decoding preview…')
+        worker = _AssetPreviewWorker(self.database_path, request_id, self)
+        self._preview_workers.add(worker)
+        worker.payload_ready.connect(self._on_preview_payload_ready)
+        worker.preview_failed.connect(self._on_preview_error)
+        worker.finished.connect(
+            lambda current=worker: self._preview_workers.discard(current)
+        )
+        worker.finished.connect(worker.deleteLater)
+        worker.start()
 
+    def _on_preview_payload_ready(
+        self, request_id: str, payload: bytes, kind: str
+    ) -> None:
+        if request_id != self._current_request_id:
+            return
+        item = self.items_by_id.get(request_id)
+        if item is None:
+            return
+        self._current_payload = payload
+        if item.kind == 'compressed':
+            item.kind = kind
+            row = self.asset_table.currentRow()
+            if row >= 0 and self.asset_table.item(row, 4) is not None:
+                self.asset_table.item(row, 4).setText(
+                    _KIND_LABELS.get(item.kind, item.kind.upper())
+                )
+        try:
             if item.kind in _IMAGE_KINDS:
                 from ..cache.cache_viewer import ImageLoaderThread
 
@@ -1337,6 +1387,7 @@ class DatabaseAssetExplorer(QWidget):
                 self.preview_stack.setCurrentWidget(self.text_preview)
         except Exception as exc:
             self._show_info(f'Preview failed: {type(exc).__name__}: {exc}')
+
 
     def _on_image_ready(self, request_id: str, rgba: bytes, width: int, height: int) -> None:
         if request_id != self._current_request_id:
@@ -1508,11 +1559,11 @@ class DatabaseAssetExplorer(QWidget):
         if not target:
             return
         try:
-            if self._current_payload is None or self._current_entry_id != item.entry_id:
-                self._load_preview(item)
-            if self._current_payload is None:
-                raise SQLiteBrowserError('Payload could not be read from the database.')
-            Path(target).write_bytes(self._current_payload)
+            # Export stays independent from preview decoding and preserves the exact
+            # stored (possibly compressed) payload.
+            data = self._read_entry_bytes(item.entry_id)
+            _url, raw_payload, _has_header = split_rbxh_entry(data)
+            Path(target).write_bytes(raw_payload)
             self.status_label.setText(f'Exported raw payload to {target}')
         except (OSError, SQLiteBrowserError) as exc:
             QMessageBox.warning(self, 'Export failed', str(exc))
@@ -1606,6 +1657,12 @@ class DatabaseAssetExplorer(QWidget):
             self._name_resolver.wait()
         self._stop_loader('_image_loader')
         self._stop_loader('_mesh_loader')
+        workers = tuple(self._preview_workers)
+        for worker in workers:
+            worker.requestInterruption()
+        for worker in workers:
+            worker.wait()
+        self._preview_workers.clear()
 
     def closeEvent(self, event) -> None:
         self._shutdown_workers()
