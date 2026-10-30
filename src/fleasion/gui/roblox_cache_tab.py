@@ -205,10 +205,11 @@ class _CacheEntryPreviewWorker(QThread):
                     decompress_roblox_payload_file(raw_path, decoded_path)
                 if self.isInterruptionRequested():
                     return
-                with decoded_path.open('rb') as handle:
-                    prefix = handle.read(8192)
-                kind = detect_roblox_payload_kind(prefix, url=source_url)
                 payload = decoded_path.read_bytes()
+                # Use the complete selected payload for deep RBXM/XML
+                # classification. Compressed INST chunks may not expose their
+                # class names in the first few kilobytes.
+                kind = detect_roblox_payload_kind(payload, url=source_url)
                 response_asset = extract_cached_http_response_asset_payload(
                     payload, url=source_url
                 )
