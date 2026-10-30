@@ -588,6 +588,16 @@ def detect_roblox_payload_kind(payload: bytes, *, url: str = '') -> str:
         if b'KeyframeSequence' in payload:
             return 'anim'
         return 'xml'
+    # Keep generic well-formed XML readable too. Roblox XML documents are
+    # handled above; other XML should be shown as text, not a hex-only "other".
+    if xml_start.startswith(b'<'):
+        try:
+            import xml.etree.ElementTree as ET
+            ET.fromstring(payload)
+        except (ET.ParseError, ValueError, TypeError):
+            pass
+        else:
+            return 'xml'
     if _looks_like_json_prefix(payload):
         return 'json'
     return 'other'
