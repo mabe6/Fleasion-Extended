@@ -7,6 +7,7 @@ import re
 import sqlite3
 import tempfile
 import time
+from dataclasses import replace
 from pathlib import Path
 
 from PyQt6.QtCore import Qt, QThread, QTimer, pyqtSignal
@@ -1014,7 +1015,12 @@ class RobloxCacheTab(QWidget):
             return
         if entry.kind in {'compressed', 'other'} and kind != 'other':
             old_kind = entry.kind
-            entry.kind = kind
+            entry = replace(entry, kind=kind)
+            self.entries_by_id[request_id] = entry
+            self.entries = [
+                entry if current.entry_id == request_id else current
+                for current in self.entries
+            ]
             self.preview_title.setText(f'{kind.upper()} · {entry.entry_id[:12]}')
             self.preview_details.setText(
                 self.preview_details.text().replace(f'Type: {old_kind}', f'Type: {kind}')
