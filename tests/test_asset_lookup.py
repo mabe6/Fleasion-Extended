@@ -160,6 +160,17 @@ def test_download_refuses_untrusted_signed_location(tmp_path: Path) -> None:
     with pytest.raises(AssetLookupError, match='not hosted by Roblox'):
         download_asset('12345', tmp_path / 'asset.bin', session=cast(requests.Session, session))
 
+def test_asset_metadata_preview_explains_type_and_missing_asset_id() -> None:
+    preview = format_asset_metadata_preview(
+        b"roblox-assettypeid: 4\\r\\n",
+    )
+
+    assert "Asset type: Mesh (ID 4)" in preview
+    assert "Roblox Asset ID: not present in this record" in preview
+    assert "metadata only" in preview
+    assert "cannot be converted back" in preview
+
+
 def test_cache_header_parser_treats_asset_type_as_metadata_not_asset_id() -> None:
     from fleasion.utils.asset_lookup import _cache_header_metadata
 
