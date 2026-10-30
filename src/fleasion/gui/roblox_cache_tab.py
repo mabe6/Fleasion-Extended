@@ -386,6 +386,7 @@ class RobloxCacheTab(QWidget):
             ('Images / textures', 'images'),
             ('KTX textures', 'ktx'),
             ('Meshes', 'mesh'),
+            ('Collision / physics meshes', 'csgphs'),
             ('Roblox models', 'models'),
             ('Animations', 'animations'),
             ('Audio', 'audio'),
