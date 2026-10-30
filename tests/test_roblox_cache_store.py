@@ -436,18 +436,26 @@ def test_scan_detects_zstd_encoded_fts_payload_without_changing_cache_bytes(tmp_
     entry_data = _make_entry(url, compressed_payload)
     store = _make_store(tmp_path, monkeypatch, {target_id: entry_data})
 
+    def fail_if_scan_decompresses(*_args, **_kwargs):
+        raise AssertionError("cache scanning must not decompress payloads")
+
+    monkeypatch.setattr(
+        store_module, "decompress_roblox_payload_prefix", fail_if_scan_decompresses
+    )
     found = {item.entry_id: item for item in store.scan()}[target_id]
 
-    assert found.kind == "png"
+    assert found.kind == "compressed"
     assert found.asset_id == ""
     assert decompress_roblox_payload(compressed_payload) == inner_payload
     assert store._get_entry_data(target_id)[0] == entry_data
 
 
-def test_zstd_preview_decompression_has_a_hard_output_limit():
+def test_zstd_preview_decompression_has_no_default_output_limit():
     import zstandard
 
-    payload = zstandard.ZstdCompressor().compress(b"A" * 128)
+    expected_size = 51 * 1024 * 1024
+    payload = zstandard.ZstdCompressor().compress(b"A" * expected_size)
 
-    with pytest.raises(RobloxCacheError, match="preview limit"):
+    assert len(decompress_roblox_payload(payload)) == expected_size
+    with pytest.raises(RobloxCacheError, match="64-byte limit"):
         decompress_roblox_payload(payload, max_output_bytes=64)
