@@ -51,7 +51,7 @@ def test_local_db_opens_on_active_swaps_with_pasteable_ids_and_optional_probe(
     try:
         assert [widget.pages.tabText(i) for i in range(widget.pages.count())] == [
             "Active Swaps",
-            "Cache Slots",
+            "Asset Explorer",
         ]
         assert widget.pages.currentIndex() == 0
         assert not widget.swaps_page.isHidden()
@@ -59,6 +59,7 @@ def test_local_db_opens_on_active_swaps_with_pasteable_ids_and_optional_probe(
         assert widget.swaps_table.item(0, 0).text() == "Active"
         assert widget.swaps_table.item(0, 1).text() == "Replace idle animation"
         assert widget.swap_count_label.text() == "1 swaps"
+        assert widget.pages.tabText(1) == 'Asset Explorer'
 
         widget.swap_filter_edit.setText("no matching swap")
         assert widget.swaps_table.rowCount() == 0
@@ -147,6 +148,15 @@ def test_cache_slots_view_has_preview_and_type_status_filters(monkeypatch, tmp_p
         widget.table.selectRow(0)
         assert not widget.stop_preview_button.isHidden()
         assert preview_calls[-1] == 'a' * 32
+
+        widget.set_preview_enabled(False)
+        assert widget.preview_panel.isHidden()
+        assert widget.stop_preview_button.isHidden()
+        widget.set_preview_enabled(True)
+        assert not widget.preview_panel.isHidden()
+        assert not widget.stop_preview_button.isHidden()
+        assert preview_calls[-1] == 'a' * 32
+
         widget._stop_preview()
         assert widget.stop_preview_button.isHidden()
         assert widget.preview_panel.isHidden()
