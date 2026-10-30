@@ -10,7 +10,6 @@ import re
 from pathlib import Path
 from typing import Any
 
-from ..cache.tools.solidmodel_converter.obj_to_mesh import get_or_create_mesh_from_obj
 from ..config.manager import resolve_local_replacement_path
 from .hash_replacer_store import HashReplacerError, HashReplacerStore
 from .roblox_cache_store import RobloxCacheStore, RobloxCacheEntry
@@ -149,11 +148,8 @@ def convert_legacy_replacer_profile(
                 if not source_path.is_file():
                     raise HashReplacerError(f"replacement file does not exist: {source_path}")
 
-                # OBJ is an interchange format, not a Roblox cache Mesh payload.
-                # Convert it before content-addressed import so a hash swap stores
-                # a valid Roblox V2 mesh rather than raw Wavefront text.
-                if source_path.suffix.casefold() == ".obj":
-                    source_path = get_or_create_mesh_from_obj(source_path)
+                # HashReplacerStore converts OBJ sources to Roblox's
+                # binary V2 Mesh format while retaining the original filename.
                 cache_key = str(source_path.resolve())
                 source_hash = imported_by_source.get(cache_key, "")
                 if not source_hash:
