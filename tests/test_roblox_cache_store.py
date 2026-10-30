@@ -572,7 +572,7 @@ def test_wrapped_zstd_prefix_is_decompressed_and_detected_as_csgphs(tmp_path):
     csg_header = (
         b'CSGPHS'
         + struct.pack('<I', 8)
-        + b'\\x00\\x00'
+        + b'\x00\x00'
         + struct.pack(
             '<9I6f',
             1, 10, 5, 10, 5, 0, 0, 0, 120,
@@ -581,7 +581,7 @@ def test_wrapped_zstd_prefix_is_decompressed_and_detected_as_csgphs(tmp_path):
     )
     csg_payload = csg_header + bytes(120)
     compressed = zstandard.ZstdCompressor().compress(csg_payload)
-    wrapped = b'\\x7b\\x29\\xbe\\x18\\x00\\x00\\xb4\\x18\\x00\\x00' + compressed
+    wrapped = b'\x7b\x29\xbe\x18\x00\x00\xb4\x18\x00\x00' + compressed
 
     assert store_module.is_roblox_compressed_payload(wrapped)
     assert decompress_roblox_payload(wrapped) == csg_payload
@@ -599,11 +599,11 @@ def test_wrapped_zstd_prefix_is_decompressed_and_detected_as_csgphs(tmp_path):
 
 
 def test_roblox_asset_type_header_exposes_image_body_for_preview():
-    image = b'\\x89PNG\\r\\n\\x1a\\n' + bytes(64)
+    image = b'\x89PNG\r\n\x1a\n' + bytes(64)
     response = (
-        b'roblox-assettypeid: 1\\r\\n'
-        b'content-type: image/png\\r\\n'
-        b'\\r\\n'
+        b'roblox-assettypeid: 1\r\n'
+        b'content-type: image/png\r\n'
+        b'\r\n'
         + image
     )
 
@@ -619,7 +619,7 @@ def test_roblox_asset_type_header_exposes_image_body_for_preview():
 
 
 def test_roblox_asset_type_header_does_not_require_two_known_headers():
-    response = b'roblox-assettypeid: 78\\r\\n\\r\\n'
+    response = b'roblox-assettypeid: 78\r\n\r\n'
     parsed = store_module.parse_cached_http_response(response)
     assert parsed is not None
     assert parsed[0]['roblox-assettypeid'] == '78'
