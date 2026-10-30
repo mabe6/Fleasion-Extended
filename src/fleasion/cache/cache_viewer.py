@@ -400,6 +400,10 @@ class MeshLoaderThread(QThread):
             if self._stop_requested:
                 return
 
+            if not mesh_processing.is_mesh_data(decompressed):
+                self.error.emit('The selected payload is not a structurally valid Roblox mesh.')
+                return
+
             # Convert to OBJ
             obj_content = mesh_processing.convert(decompressed)
 

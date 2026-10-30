@@ -100,6 +100,7 @@ _KIND_LABELS = {
     'ogg': 'OGG audio',
     'mp3': 'MP3 audio',
     'json': 'JSON data',
+    'asset-metadata': 'Roblox asset metadata',
     'compressed': 'Compressed payload (type determined on open)',
     'other': 'Unknown format',
 }
@@ -126,6 +127,7 @@ _KIND_ORDER = (
     'mp3',
     'font',
     'json',
+    'asset-metadata',
     'compressed',
     'other',
 )
@@ -562,10 +564,6 @@ class DatabaseAssetExplorer(QWidget):
         self.refresh_button = QPushButton('Refresh')
         self.refresh_button.clicked.connect(self.refresh)
         filters_layout.addWidget(self.refresh_button)
-
-        self.asset_lookup_button = QPushButton('Asset Lookup…')
-        self.asset_lookup_button.clicked.connect(self._open_asset_lookup)
-        filters_layout.addWidget(self.asset_lookup_button)
 
         self.stats_total_label = QLabel('0 assets')
         filters_layout.addWidget(self.stats_total_label)
@@ -1382,7 +1380,7 @@ class DatabaseAssetExplorer(QWidget):
                 self.preview_stack.setCurrentWidget(self.font_panel)
             elif item.kind == 'json' or self._is_json_payload(payload):
                 self._load_json_preview(payload)
-            elif item.kind == 'xml':
+            elif item.kind in {'xml', 'asset-metadata'}:
                 self.text_preview.setPlainText(self._format_text_payload(payload))
                 self.preview_stack.setCurrentWidget(self.text_preview)
             else:
@@ -1529,43 +1527,6 @@ class DatabaseAssetExplorer(QWidget):
         self._current_image = None
         self.image_preview.clear()
         self.preview_stack.setCurrentWidget(self.info_preview)
-
-    def _open_asset_lookup(self) -> None:
-        from .asset_lookup_dialog import AssetLookupDialog
-
-        dialog = AssetLookupDialog(self, on_metadata=self._cache_lookup_metadata)
-        dialog.exec()
-
-    def _cache_lookup_metadata(self, asset_id: str, metadata: dict[str, str]) -> None:
-        cached = self._name_cache.setdefault(asset_id, {})
-        fields = (
-            'name',
-            'creator_name',
-            'created_at',
-            'updated_at',
-            'description',
-            'creator_type',
-            'creator_id',
-            'asset_type',
-            'price',
-            'price_status',
-            'favorite_count',
-            'source',
-        )
-        cached.update(
-            {
-                key: str(metadata.get(key) or cached.get(key) or '')
-                for key in fields
-            }
-        )
-        for item in self.items:
-            if item.asset_id == asset_id:
-                item.name = cached.get('name', '')
-                item.creator_name = cached.get('creator_name', '')
-                item.created_at = cached.get('created_at', '')
-                item.updated_at = cached.get('updated_at', '')
-        self._save_settings()
-        self._render_items()
 
     def _copy_selected_id(self) -> None:
         if self._current_entry_id:
