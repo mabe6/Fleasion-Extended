@@ -580,7 +580,12 @@ def test_wrapped_zstd_prefix_is_decompressed_and_detected_as_csgphs(tmp_path):
         )
     )
     csg_payload = csg_header + bytes(120)
-    compressed = zstandard.ZstdCompressor().compress(csg_payload)
+    compressor = zstandard.ZstdCompressor()
+    # Deliberately split into two frames to exercise read_across_frames=True.
+    compressed = (
+        compressor.compress(csg_payload[:72])
+        + compressor.compress(csg_payload[72:])
+    )
     wrapped = b'\x7b\x29\xbe\x18\x00\x00\xb4\x18\x00\x00' + compressed
 
     assert store_module.is_roblox_compressed_payload(wrapped)
