@@ -110,6 +110,8 @@ def test_dashboard_restores_fleasion_workflows_and_separates_advanced_sql(
         assert window._hash_replacer_store.root == config_dir / 'HashReplacer'
         assert window._rando_stuff_tab._hash_asset_store is window._hash_replacer_store
         assert window._rando_stuff_tab._cache_store is window._scraper_db_tab.store
+        window.show()
+        app.processEvents()
         window._open_hash_replacer_dialog()
         assert window._hash_replacer_tab.asset_store is window._hash_replacer_store
         assert window._hash_replacer_tab.cache_store is window._scraper_db_tab.store
@@ -155,7 +157,7 @@ def test_existing_asset_id_profiles_are_hidden_without_moving_or_rewriting_files
         assert 'fallen' in window._legacy_profile_names()
         assert 'fallen' not in window._visible_replacer_config_names()
         assert 'Default' in window._visible_replacer_config_names()
-        assert 'fallen' in window._rando_stuff_tab._legacy_config_combo.findData('fallen') * []
+        assert window._rando_stuff_tab._legacy_config_combo.findData('fallen') >= 0
         window.set_legacy_profiles_visible(True)
         assert 'fallen' in window._visible_replacer_config_names()
         window.set_legacy_profiles_visible(False)
