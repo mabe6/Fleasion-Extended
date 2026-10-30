@@ -117,15 +117,15 @@ def test_cache_slots_view_has_preview_and_type_status_filters(monkeypatch, tmp_p
         assert widget.asset_lookup_button.text() == 'Asset Lookup…'
         assert not widget.asset_lookup_button.isEnabled()
         assert widget.stop_preview_button.isHidden()
-        assert widget.kind_filter_combo.findData('ktx') >= 0
-        assert widget.kind_filter_combo.findData('csgphs') >= 0
+        assert widget.kind_filter_button.text() == 'All types'
+        available_kinds = {kind for kind, _label in cache_tab_module._KIND_FILTER_OPTIONS}
         for exact_kind in (
-            'png', 'jpg', 'bmp', 'gif', 'webp', 'tiff', 'ico', 'dds',
-            'psd', 'rbxm', 'xml', 'curve-anim', 'ogg', 'mp3',
+            'png', 'jpg', 'bmp', 'gif', 'webp', 'tiff', 'ico', 'dds', 'ktx',
+            'psd', 'rbxm', 'xml', 'curve-anim', 'ogg', 'mp3', 'csgphs',
             'roblox-settings', 'video-metadata', 'video-manifest', 'http-response',
+            'asset-metadata', 'other',
         ):
-            assert widget.kind_filter_combo.findData(exact_kind) >= 0
-        assert widget.kind_filter_combo.findData('asset-metadata') >= 0
+            assert exact_kind in available_kinds
         assert widget.slot_status_filter.findData('swapped') >= 0
 
         widget.entries = [
@@ -166,11 +166,13 @@ def test_cache_slots_view_has_preview_and_type_status_filters(monkeypatch, tmp_p
         assert not widget.preview_panel.isHidden()
         assert preview_calls[-1] == 'a' * 32
 
-        widget.kind_filter_combo.setCurrentIndex(widget.kind_filter_combo.findData('ktx'))
+        widget._on_kind_filters_changed({'ktx'})
+        assert widget.kind_filter_button.text() == 'KTX texture'
         assert widget.table.rowCount() == 1
         assert widget.table.item(0, 2).text() == 'ktx'
 
-        widget.kind_filter_combo.setCurrentIndex(widget.kind_filter_combo.findData('all'))
+        widget._on_kind_filters_changed(set())
+        assert widget.kind_filter_button.text() == 'All types'
         widget.slot_status_filter.setCurrentIndex(
             widget.slot_status_filter.findData('swapped')
         )
@@ -250,4 +252,24 @@ def test_cache_slots_plays_ogg_payload_instead_of_hex_dump(monkeypatch, tmp_path
         assert not widget._audio_preview_path
     finally:
         widget.close()
+        app.processEvents()
+
+
+def test_cache_asset_type_filter_popup_is_searchable_multi_select_and_scrollable():
+    app = _qapp()
+    options = list(cache_tab_module._KIND_FILTER_OPTIONS)
+    popup = cache_tab_module._KindFilterPopup(options, {kind for kind, _label in options})
+    try:
+        assert popup.scroll_area.height() == 265
+        assert not popup.all_button.isHidden()
+        assert not popup.clear_button.isHidden()
+        popup.filter_edit.setText('collision')
+        assert not popup.checkboxes['csgphs'].isHidden()
+        assert popup.checkboxes['png'].isHidden()
+        popup._clear()
+        assert popup.active == set()
+        popup._select_all()
+        assert popup.active == {kind for kind, _label in options}
+    finally:
+        popup.close()
         app.processEvents()
