@@ -49,6 +49,7 @@ from ..database.roblox_cache_store import (
     decompress_roblox_payload_file,
     detect_roblox_payload_kind,
     extract_cached_http_response_asset_payload,
+    format_csgphs_preview,
     format_cached_http_response_preview,
     is_roblox_compressed_payload,
     parse_cached_http_response,
@@ -102,6 +103,7 @@ _KIND_LABELS = {
     'rbxm': 'Roblox model (RBXM)',
     'xml': 'Roblox XML / model',
     'mesh': 'Mesh',
+    'csgphs': 'Roblox collision mesh (CSGPHS)',
     'font': 'Font',
     'ogg': 'OGG audio',
     'mp3': 'MP3 audio',
@@ -121,6 +123,7 @@ _KIND_ORDER = (
     'anim',
     'curve-anim',
     'mesh',
+    'csgphs',
     'rbxm',
     'xml',
     'png',
@@ -184,6 +187,8 @@ def _kind_group(kind: str) -> str:
     """Return a human-readable high-level group for a detected payload."""
     if kind in {'anim', 'curve-anim'}:
         return 'Animations'
+    if kind == 'csgphs':
+        return 'Physics'
     if kind in _IMAGE_KINDS:
         return 'Images'
     if kind in _MODEL_KINDS:
@@ -1548,6 +1553,9 @@ class DatabaseAssetExplorer(QWidget):
                 self._load_json_preview(payload)
             elif item.kind in {'xml', 'asset-metadata'}:
                 self.text_preview.setPlainText(self._format_text_payload(payload))
+                self.preview_stack.setCurrentWidget(self.text_preview)
+            elif item.kind == 'csgphs':
+                self.text_preview.setPlainText(format_csgphs_preview(payload))
                 self.preview_stack.setCurrentWidget(self.text_preview)
             elif item.kind in {'roblox-settings', 'video-metadata', 'video-manifest', 'http-response'}:
                 self.text_preview.setPlainText(
