@@ -178,3 +178,18 @@ def test_binary_keyframe_sequence_is_classified_as_animation_and_parsed():
     keyframes = load_animation_data(binary)
     assert len(keyframes) == 1
     assert "Torso" in keyframes[0].pose_by_part_name
+
+
+def test_xml_without_referent_attributes_keeps_every_instance_distinct():
+    import xml.etree.ElementTree as ET
+
+    from fleasion.cache.roblox_document import _xml_to_document
+
+    payload = _curve_animation_xml()
+    xml_instance_count = sum(
+        1 for element in ET.fromstring(payload).iter("Item")
+    )
+    document = _xml_to_document(payload)
+
+    assert len(document.instances) == xml_instance_count
+    assert len({instance.referent for instance in document.instances.values()}) == xml_instance_count
