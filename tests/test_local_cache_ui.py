@@ -214,6 +214,7 @@ def test_cache_slots_plays_ogg_payload_instead_of_hex_dump(monkeypatch, tmp_path
     try:
         entry = RobloxCacheEntry(
             entry_id='c' * 32,
+            asset_id='',
             file_size=128,
             database_size=128,
             modified_at=1,

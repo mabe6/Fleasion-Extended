@@ -344,7 +344,9 @@ class LocalDatabaseEditorWidget(QWidget):
         if index < 0:
             self.database_combo.addItem(path.name or normalised, normalised)
             index = self.database_combo.count() - 1
-            self.database_combo.setItemToolTip(index, normalised)
+            self.database_combo.setItemData(
+                index, normalised, Qt.ItemDataRole.ToolTipRole
+            )
         if select:
             self.database_combo.setCurrentIndex(index)
         self.database_combo.blockSignals(False)
