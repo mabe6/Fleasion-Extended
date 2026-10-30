@@ -189,7 +189,19 @@ class _CacheEntryPreviewWorker(QThread):
                 source_url, _raw_size = self.store.copy_entry_payload_to_file(self.entry_id, raw_path)
                 if self.isInterruptionRequested():
                     return
-                decompress_roblox_payload_file(raw_path, decoded_path)
+                lower_url = source_url.casefold().split("?", 1)[0]
+                # DCZ/settings-compressed payloads use Roblox's Zstandard
+                # dictionary. Do not try to decode them with an empty dictionary.
+                dictionary_compressed = (
+                    lower_url.endswith(".dcz")
+                    or "settings-compressed/" in lower_url
+                    or "encoding=dcz" in source_url.casefold()
+                )
+                if dictionary_compressed:
+                    import shutil
+                    shutil.copyfile(raw_path, decoded_path)
+                else:
+                    decompress_roblox_payload_file(raw_path, decoded_path)
                 if self.isInterruptionRequested():
                     return
                 with decoded_path.open('rb') as handle:
