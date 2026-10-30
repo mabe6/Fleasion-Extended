@@ -40,6 +40,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+from ..database.hash_replacer_store import HashReplacerError, HashReplacerStore
 from ..utils.logging import log_buffer
 from ..utils.paths import CONFIG_DIR
 from ..utils.plural import format_count
@@ -903,6 +904,44 @@ class RandoStuffTab(QWidget):
         root.setContentsMargins(10, 10, 10, 10)
         root.setSpacing(10)
 
+        # Imported source files are staged for the independent cache-hash Replacer.
+        self._hash_asset_store = HashReplacerStore()
+        self._hash_assets_section = CollapsibleSection(
+            "Hash Replacer Assets",
+            expanded=True,
+        )
+        hash_asset_body = QWidget()
+        hash_asset_layout = QVBoxLayout(hash_asset_body)
+        hash_asset_layout.setContentsMargins(0, 0, 0, 0)
+        hash_asset_layout.setSpacing(6)
+        hash_asset_layout.addWidget(QLabel(
+            "Import replacement files here. Files are stored by SHA-256 in a separate library; "
+            "the Roblox cache is not modified until you apply a rule in Replacer → Cache Hash."
+        ))
+        hash_asset_buttons = QHBoxLayout()
+        self._hash_import_files_button = QPushButton("Import file(s)…")
+        self._hash_import_files_button.clicked.connect(self._import_hash_asset_files)
+        hash_asset_buttons.addWidget(self._hash_import_files_button)
+        self._hash_import_folder_button = QPushButton("Import folder…")
+        self._hash_import_folder_button.clicked.connect(self._import_hash_asset_folder)
+        hash_asset_buttons.addWidget(self._hash_import_folder_button)
+        self._hash_open_assets_button = QPushButton("Open asset folder")
+        self._hash_open_assets_button.clicked.connect(
+            lambda: __import__("fleasion.utils", fromlist=["open_folder"]).open_folder(
+                self._hash_asset_store.assets_dir
+            )
+        )
+        hash_asset_buttons.addWidget(self._hash_open_assets_button)
+        hash_asset_buttons.addStretch(1)
+        hash_asset_layout.addLayout(hash_asset_buttons)
+        self._hash_asset_status = QLabel(
+            f"Library: {self._hash_asset_store.assets_dir}"
+        )
+        self._hash_asset_status.setWordWrap(True)
+        hash_asset_layout.addWidget(self._hash_asset_status)
+        self._hash_assets_section.add_widget(hash_asset_body)
+        root.addWidget(self._hash_assets_section)
+
         # Match Modifications/Settings: every utility lives in the same
         # collapsible rounded section card instead of a native QGroupBox.
         self._rejoin_section = CollapsibleSection(
@@ -1259,6 +1298,43 @@ class RandoStuffTab(QWidget):
         self._username_self_game_creator_chk.toggled.connect(
             lambda _checked: self._on_username_spoofer_changed()
         )
+
+    def _import_hash_asset_files(self) -> None:
+        paths, _filter = QFileDialog.getOpenFileNames(
+            self,
+            "Import replacement assets",
+            "",
+            "All files (*)",
+        )
+        if paths:
+            self._import_hash_asset_paths(paths)
+
+    def _import_hash_asset_folder(self) -> None:
+        folder = QFileDialog.getExistingDirectory(
+            self,
+            "Import replacement asset folder",
+            "",
+        )
+        if folder:
+            self._import_hash_asset_paths([folder])
+
+    def _import_hash_asset_paths(self, paths: list[str]) -> None:
+        try:
+            imported = self._hash_asset_store.import_paths(paths)
+        except (HashReplacerError, OSError) as exc:
+            self._hash_asset_status.setText(f"Import failed: {exc}")
+            QMessageBox.warning(self, "Hash Replacer asset import", str(exc))
+            return
+        total_bytes = sum(int(item.get("size") or 0) for item in imported)
+        errors = imported[0].get("import_errors", []) if imported else []
+        message = (
+            f"Imported {len(imported):,} file(s), {total_bytes:,} bytes. "
+            "Open Replacer → Cache Hash to create target-hash rules."
+        )
+        if errors:
+            message += f" Skipped {len(errors)} file(s): " + " | ".join(errors[:5])
+        self._hash_asset_status.setText(message)
+        log_buffer.log("HashReplacer", message)
 
     def changeEvent(self, a0: QEvent | None):
         super().changeEvent(a0)
