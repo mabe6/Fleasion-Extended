@@ -888,9 +888,14 @@ class ReplacerConfigWindow(QDialog):
         settings = self.config_manager.settings
         key = 'hidden_legacy_replacer_configs'
         if key not in settings:
-            settings[key] = [
-                name for name in self.config_manager.config_names if name != 'Default'
-            ]
+            existing_names = self.config_manager.config_names
+            archived_names = [name for name in existing_names if name != 'Default']
+            # A folder containing only old profiles still needs a clean visible
+            # Default profile for newly created rules.
+            if archived_names and 'Default' not in existing_names:
+                self.config_manager.create_config('Default')
+                self.config_manager.refresh_config_names()
+            settings[key] = archived_names
         settings.setdefault('show_legacy_replacer_configs', False)
         if (
             not settings.get('show_legacy_replacer_configs', False)
