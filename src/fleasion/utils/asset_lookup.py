@@ -419,6 +419,20 @@ def format_asset_metadata_preview(
         cdn_hash = match.group(1).casefold() if match else ""
     if cdn_hash:
         lines.append(f"CDN content hash: {cdn_hash}")
+    if metadata.get("cdn_host"):
+        lines.append(f"CDN host: {metadata['cdn_host']}")
+    if metadata.get("cdn_url_expires_at"):
+        expiry_text = str(metadata["cdn_url_expires_at"])
+        try:
+            expiry = datetime.fromisoformat(expiry_text.replace("Z", "+00:00"))
+            expired = expiry <= datetime.now(timezone.utc)
+        except (TypeError, ValueError):
+            expired = False
+        lines.append(
+            f"Stored CDN URL: {'expired' if expired else 'expires'} at {expiry_text}"
+        )
+    if metadata.get("cache_payload_size"):
+        lines.append(f"Cached response record size: {metadata['cache_payload_size']} bytes")
 
     description = str(metadata.get("description") or "").strip()
     if description:
