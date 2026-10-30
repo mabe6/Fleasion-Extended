@@ -47,7 +47,6 @@ from ..database.roblox_cache_store import (
 from ..utils import log_buffer
 
 
-_MAX_PREVIEW_BYTES = 50 * 1024 * 1024
 _SIZE_QUERY_RE = re.compile(
     r'^(<=|>=|<|>|=)?\s*(\d+(?:\.\d+)?)\s*(b|kb|kib|mb|mib|gb|gib)?$',
     re.I,
@@ -765,19 +764,18 @@ class RobloxCacheTab(QWidget):
     def _load_slot_preview(self, entry: RobloxCacheEntry) -> None:
         self._reset_slot_preview()
         self._current_preview_request_id = entry.entry_id
-        if entry.file_size > _MAX_PREVIEW_BYTES:
-            self.preview_info.setText(
-                f'This entry is {_format_size(entry.file_size)}. Preview is skipped for safety.'
-            )
-            return
-
         try:
             data, _storage_mode = self.store._get_entry_data(entry.entry_id)
             _url, payload, _has_header = split_rbxh_entry(data)
-            payload = decompress_roblox_payload(
-                payload, max_output_bytes=_MAX_PREVIEW_BYTES
-            )
+            # Payload decoding happens only after the user selects this entry.
+            # No arbitrary decompressed-size cap: the decoder works with the real payload.
+            payload = decompress_roblox_payload(payload)
             kind = detect_roblox_payload_kind(payload)
+            if entry.kind == 'compressed':
+                self.preview_title.setText(f'{kind.upper()} · {entry.entry_id[:12]}')
+                self.preview_details.setText(
+                    self.preview_details.text().replace('Type: compressed', f'Type: {kind}')
+                )
             if kind in _IMAGE_KINDS:
                 from ..cache.cache_viewer import ImageLoaderThread
 
