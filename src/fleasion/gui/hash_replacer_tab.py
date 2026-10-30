@@ -142,6 +142,18 @@ class HashReplacerTab(QWidget):
         self.status_label.setWordWrap(True)
         root.addWidget(self.status_label)
 
+    def set_target_hash(self, cache_hash: str) -> None:
+        """Accept a selected cache hash from Scraper DB."""
+        try:
+            value = self.asset_store.validate_cache_hash(cache_hash)
+        except HashReplacerError as exc:
+            self.status_label.setText(str(exc))
+            return
+        self.target_hash_edit.setText(value)
+        self.status_label.setText(
+            f"Target set to cache hash {value}. Choose an imported file or download an Asset ID."
+        )
+
     def refresh_profiles(self, selected: str | None = None) -> None:
         current = selected or self.profile_combo.currentText() or "Default"
         try:
