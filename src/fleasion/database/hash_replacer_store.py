@@ -224,14 +224,24 @@ class HashReplacerStore:
         for source in files:
             temp_path: Path | None = None
             try:
-                if source.stat().st_size <= 0:
+                read_source = source
+                converted_obj = source.suffix.casefold() == ".obj"
+                if converted_obj:
+                    # Wavefront OBJ is only an interchange format. A cache
+                    # replacement must contain Roblox's binary Mesh payload.
+                    from ..cache.tools.solidmodel_converter.obj_to_mesh import (
+                        get_or_create_mesh_from_obj,
+                    )
+                    read_source = get_or_create_mesh_from_obj(source)
+
+                if read_source.stat().st_size <= 0:
                     errors.append(f"{source.name}: empty file skipped")
                     continue
                 digest = hashlib.sha256()
                 size = 0
                 fd, temp_name = tempfile.mkstemp(prefix=".import-", suffix=".tmp", dir=self.assets_dir)
                 temp_path = Path(temp_name)
-                with os.fdopen(fd, "wb") as destination, source.open("rb") as incoming:
+                with os.fdopen(fd, "wb") as destination, read_source.open("rb") as incoming:
                     prefix = incoming.read(65536)
                     if prefix.startswith(b"RBXH"):
                         raise HashReplacerError(
@@ -251,7 +261,7 @@ class HashReplacerStore:
                     os.fsync(destination.fileno())
 
                 asset_hash = digest.hexdigest()
-                extension = self._safe_extension(source)
+                extension = ".mesh" if converted_obj else self._safe_extension(source)
                 filename = asset_hash + extension
                 target_path = self.assets_dir / filename
                 existing = records.get(asset_hash, {})
@@ -278,10 +288,11 @@ class HashReplacerStore:
                     "source_names": source_names[-20:],
                     "kind": kind,
                     "size": size,
+                    "converted_from": "obj" if converted_obj else "",
                 }
                 records[asset_hash] = record
                 imported.append(record)
-            except (OSError, HashReplacerError) as exc:
+            except (OSError, ValueError, RuntimeError, HashReplacerError) as exc:
                 errors.append(f"{source.name}: {exc}")
             finally:
                 if temp_path is not None:
