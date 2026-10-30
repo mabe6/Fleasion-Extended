@@ -30,7 +30,6 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from .database_asset_explorer import DatabaseAssetExplorer
 from ..database.roblox_cache_store import default_roblox_cache_root
 from ..database.sqlite_browser import (
     MAX_QUERY_ROWS,
@@ -81,7 +80,7 @@ class LocalDatabaseEditorWidget(QWidget):
         self.embedded = embedded
         self.config_manager = config_manager
         self.setWindowFlag(Qt.WindowType.Window, not embedded)
-        self.setWindowTitle("Local SQLite Database Editor — Fleasion Extended")
+        self.setWindowTitle("SQLite Browser — Fleasion Extended")
         self.resize(1180, 760)
         self.browser: SQLiteBrowser | None = None
         self.current_table = ""
@@ -139,13 +138,12 @@ class LocalDatabaseEditorWidget(QWidget):
         self.database_list = QListWidget(self)
         self.database_list.hide()
 
+        # The Asset Explorer is the single cache-inventory UI in the dashboard.
+        # This widget is only the direct SQLite browser, so expose Data/Schema/SQL
+        # as its primary tabs instead of nesting a duplicate asset explorer inside it.
         self.tabs = QTabWidget()
         self.tabs.setDocumentMode(True)
-        self.asset_explorer = DatabaseAssetExplorer(self.tabs, config_manager=self.config_manager)
-        self.tabs.addTab(self.asset_explorer, 'Asset Explorer')
-
-        self.advanced_tabs = QTabWidget()
-        self.advanced_tabs.setDocumentMode(True)
+        self.advanced_tabs = self.tabs
 
         self.data_tab = QWidget()
         data_layout = QVBoxLayout(self.data_tab)
@@ -234,8 +232,6 @@ class LocalDatabaseEditorWidget(QWidget):
         self.query_grid.horizontalHeader().setStretchLastSection(True)
         sql_layout.addWidget(self.query_grid, 1)
         self.advanced_tabs.addTab(self.sql_tab, "SQL (read-only)")
-        self.tabs.addTab(self.advanced_tabs, "Advanced SQLite")
-
         root.addWidget(self.tabs, 1)
         footer = QHBoxLayout()
         self.status_label = QLabel("Read-only mode. No database has been opened.")
@@ -414,8 +410,6 @@ class LocalDatabaseEditorWidget(QWidget):
                 (table.name, table.kind),
             )
         self.table_combo.blockSignals(False)
-        asset_database_supported = self.asset_explorer.set_database(browser.path)
-
         if tables:
             preferred_index = next(
                 (
@@ -427,11 +421,7 @@ class LocalDatabaseEditorWidget(QWidget):
             self.table_combo.setCurrentIndex(preferred_index)
             preferred_table = tables[preferred_index]
             self._load_table(preferred_table.name, preferred_table.kind)
-            self.tabs.setCurrentWidget(
-                self.asset_explorer if asset_database_supported else self.advanced_tabs
-            )
-            if not asset_database_supported:
-                self.advanced_tabs.setCurrentWidget(self.data_tab)
+            self.tabs.setCurrentWidget(self.data_tab)
         else:
             self.current_table = ""
             self.data_grid.clear()
@@ -439,8 +429,7 @@ class LocalDatabaseEditorWidget(QWidget):
             self.data_grid.setColumnCount(0)
             self.table_combo.clear()
             self.status_label.setText(f"Opened {browser.path}; no tables or views found.")
-            self.tabs.setCurrentWidget(self.advanced_tabs)
-            self.advanced_tabs.setCurrentWidget(self.data_tab)
+            self.tabs.setCurrentWidget(self.data_tab)
 
         self.status_label.setText(
             f"Opened read-only: {browser.path} — {len(tables)} table(s)/view(s)."
