@@ -922,7 +922,7 @@ class RandoStuffTab(QWidget):
             )
             self._hash_asset_store = HashReplacerStore(root=hash_root)
         self._hash_assets_section = CollapsibleSection(
-            "Hash Replacer Assets",
+            "Asset Hash Library",
             expanded=True,
         )
         hash_asset_body = QWidget()
@@ -940,7 +940,7 @@ class RandoStuffTab(QWidget):
         self._hash_import_folder_button = QPushButton("Import folder…")
         self._hash_import_folder_button.clicked.connect(self._import_hash_asset_folder)
         hash_asset_buttons.addWidget(self._hash_import_folder_button)
-        self._hash_open_assets_button = QPushButton("Open asset folder")
+        self._hash_open_assets_button = QPushButton("Open Asset Hash folder")
         self._hash_open_assets_button.clicked.connect(
             lambda: open_folder(self._hash_asset_store.assets_dir)
         )
