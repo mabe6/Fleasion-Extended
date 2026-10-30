@@ -753,6 +753,11 @@ class ReplacerConfigWindow(QDialog):
         self.tab_widget = QTabWidget()
         self._registered_module_interceptors = []
 
+        from ..database.hash_replacer_store import HashReplacerStore
+
+        hash_root = Path(self.config_manager.configs_folder).parent / 'HashReplacer'
+        self._hash_replacer_store = HashReplacerStore(root=hash_root)
+
         # Replacer is the main workflow. The legacy Asset-ID editor and the
         # new local cache-hash editor have separate config stores.
         from .roblox_cache_tab import RobloxCacheTab
@@ -795,6 +800,7 @@ class ReplacerConfigWindow(QDialog):
             self,
             config_manager=self.config_manager,
             proxy_master=self.proxy_master,
+            hash_asset_store=self._hash_replacer_store,
         )
 
         self._subplace_tab = SubplaceJoinerTab(
@@ -939,7 +945,7 @@ class ReplacerConfigWindow(QDialog):
         # separate from the legacy configs/ folder and need no HTTP proxy.
         from .hash_replacer_tab import HashReplacerTab
 
-        self._hash_replacer_tab = HashReplacerTab(self)
+        self._hash_replacer_tab = HashReplacerTab(self, asset_store=self._hash_replacer_store)
         modes.addTab(self._hash_replacer_tab, 'Cache Hash')
 
         outer_layout.addWidget(modes)
