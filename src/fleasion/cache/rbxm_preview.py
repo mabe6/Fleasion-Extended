@@ -217,6 +217,7 @@ class RbxmPreviewWidget(QWidget):
         left_layout.setSpacing(4)
 
         self.tree = QTreeWidget()
+        left_layout.addWidget(QLabel("Model hierarchy"))
         self.tree.setHeaderHidden(True)
         self.tree.setIndentation(10)
         self.tree.setSelectionMode(QTreeWidget.SelectionMode.SingleSelection)
@@ -245,6 +246,7 @@ class RbxmPreviewWidget(QWidget):
         right_layout = QVBoxLayout(right_pane)
         right_layout.setContentsMargins(0, 0, 0, 0)
         right_layout.setSpacing(4)
+        right_layout.addWidget(QLabel("Selected object properties"))
         self.properties_table = QTableWidget()
         self.properties_table.setColumnCount(3)
         self.properties_table.setHorizontalHeaderLabels(
@@ -294,7 +296,9 @@ class RbxmPreviewWidget(QWidget):
         right_layout.addLayout(right_bottom)
         splitter.addWidget(right_pane)
 
-        splitter.setSizes([220, 500])
+        splitter.setStretchFactor(0, 3)
+        splitter.setStretchFactor(1, 2)
+        splitter.setSizes([600, 400])
         layout.addWidget(splitter, stretch=1)
         self._update_type_column_visibility()
 
