@@ -571,15 +571,9 @@ class RobloxCacheTab(QWidget):
         entries_layout.addLayout(paging_row)
 
         inventory_actions = QHBoxLayout()
-        set_target = QPushButton('Use cache hash as target')
-        set_target.clicked.connect(self._set_selected_as_target)
-        inventory_actions.addWidget(set_target)
-        set_source = QPushButton('Use cache hash as replacement')
-        set_source.clicked.connect(self._set_selected_as_source)
-        inventory_actions.addWidget(set_source)
-        import_button = QPushButton('Import File → Target…')
-        import_button.clicked.connect(self._import_file)
-        inventory_actions.addWidget(import_button)
+        send_to_replacer = QPushButton('Send cache hash to Replacer')
+        send_to_replacer.clicked.connect(self._send_hash_to_replacer)
+        inventory_actions.addWidget(send_to_replacer)
         export_button = QPushButton('Export Entry…')
         export_button.clicked.connect(self._export_selected)
         inventory_actions.addWidget(export_button)
@@ -759,6 +753,8 @@ class RobloxCacheTab(QWidget):
         copy_kind_action = copy_menu.addAction('Kind')
         copy_name_action = copy_menu.addAction('Name')
         copy_url_action = copy_menu.addAction('URL')
+        menu.addSeparator()
+        send_to_replacer_action = menu.addAction('Use as Replacer target hash')
         copy_asset_id_action.setEnabled(any(
             (self.table.item(row, 1).text().strip() not in {"", "—"})
             for row in selected_rows
@@ -778,6 +774,30 @@ class RobloxCacheTab(QWidget):
             self._copy_selected_table_column(9)
         elif action == copy_url_action:
             self._copy_selected_table_column(8)
+        elif action == send_to_replacer_action:
+            self._send_hash_to_replacer()
+
+    def _send_hash_to_replacer(self) -> None:
+        """Pass the selected 32-character cache hash to the new local Replacer."""
+        cache_hash = self._selected_entry_id()
+        if not cache_hash:
+            return
+        window = self.window()
+        hash_tab = getattr(window, '_hash_replacer_tab', None)
+        if hash_tab is None:
+            QMessageBox.information(
+                self,
+                'Cache hash',
+                f'Cache hash: {cache_hash}\\nCopy it and paste it into Replacer → Cache Hash.',
+            )
+            return
+        hash_tab.set_target_hash(cache_hash)
+        tab_widget = getattr(window, 'tab_widget', None)
+        if tab_widget is not None:
+            tab_widget.setCurrentWidget(window._replacer_tab)
+        modes = getattr(window, '_replacer_modes', None)
+        if modes is not None:
+            modes.setCurrentWidget(hash_tab)
 
     def _set_selected_as_target(self) -> None:
         entry_id = self._selected_entry_id()
