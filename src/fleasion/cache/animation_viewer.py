@@ -742,6 +742,25 @@ def load_curve_animation_data(anim_data: bytes) -> List[Keyframe]:
                 _walk_xml(item)
                 break
 
+    if not bone_curves and anim_data.startswith(b'<roblox!'):
+        # Some binary RBXM variants store ValuesAndTimes as a byte string that
+        # the generic property reader decodes as text. Re-emit the already
+        # parsed document as RBXMX so the XML path can safely base64-decode the
+        # binary property and reuse the well-tested curve reader.
+        try:
+            from .tools.solidmodel_converter.rbxm.xml_writer import write_rbxmx
+
+            xml_payload = write_rbxmx(tree)
+            if xml_payload:
+                xml_keys = load_curve_animation_data(xml_payload)
+                if xml_keys:
+                    return xml_keys
+        except Exception as exc:
+            log_buffer.log(
+                'AnimationViewer',
+                f'CurveAnimation binary-to-XML fallback failed: {type(exc).__name__}: {exc}',
+            )
+
     if not bone_curves:
         log_buffer.log('AnimationViewer', 'CurveAnimation: no bone curves found')
         return []
