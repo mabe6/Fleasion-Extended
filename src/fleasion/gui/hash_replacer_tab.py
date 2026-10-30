@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtWidgets import (
     QComboBox,
     QHBoxLayout,
@@ -33,6 +33,8 @@ def _format_size(size: int) -> str:
 
 class HashReplacerTab(QWidget):
     """Map target cache hashes to files imported into the separate hash library."""
+
+    cache_changed = pyqtSignal()
 
     def __init__(
         self,
@@ -338,6 +340,17 @@ class HashReplacerTab(QWidget):
             QMessageBox.information(self, "Hash Replacer", "Select a rule first.")
             return
         target_hash, source_hash = selected
+        answer = QMessageBox.warning(
+            self,
+            "Confirm cache replacement",
+            f"Replace cache slot {target_hash} with the selected imported asset?\\n\\n"
+            "Fleasion keeps a backup of the original entry. Close Roblox Player and Studio "
+            "before continuing.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
+            QMessageBox.StandardButton.Cancel,
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
         try:
             source_path = self.asset_store.asset_path(source_hash)
             origin = f"Hash Replacer / {self.profile_combo.currentText()}"
@@ -370,6 +383,7 @@ class HashReplacerTab(QWidget):
             QMessageBox.warning(self, "Hash replacement failed", str(exc))
             return
         self.status_label.setText(message)
+        self.cache_changed.emit()
         QMessageBox.information(self, "Hash replacement applied", message)
 
     def _restore_selected(self) -> None:
@@ -383,6 +397,7 @@ class HashReplacerTab(QWidget):
             QMessageBox.warning(self, "Restore failed", str(exc))
             return
         self.status_label.setText(message)
+        self.cache_changed.emit()
         QMessageBox.information(self, "Cache entry restored", message)
 
     def showEvent(self, event) -> None:
