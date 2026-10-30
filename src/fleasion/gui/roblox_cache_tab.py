@@ -1459,7 +1459,8 @@ class RobloxCacheTab(QWidget):
         entry = self.entries_by_id.get(request_id)
         if entry is None:
             return
-        if entry.kind in {'compressed', 'other'} and kind != 'other':
+        refinable_kinds = {'compressed', 'other', 'rbxm', 'xml'}
+        if entry.kind in refinable_kinds and kind != 'other' and kind != entry.kind:
             old_kind = entry.kind
             entry = replace(entry, kind=kind)
             self.entries_by_id[request_id] = entry
@@ -1471,6 +1472,15 @@ class RobloxCacheTab(QWidget):
             self.preview_details.setText(
                 self.preview_details.text().replace(f'Type: {old_kind}', f'Type: {kind}')
             )
+            row = self.table.currentRow()
+            id_cell = self.table.item(row, 0) if row >= 0 else None
+            if (
+                id_cell is not None
+                and str(id_cell.data(Qt.ItemDataRole.UserRole) or '') == request_id
+            ):
+                kind_cell = self.table.item(row, 2)
+                if kind_cell is not None:
+                    kind_cell.setText(kind)
             if not entry.asset_id and kind == 'roblox-settings':
                 self.preview_details.setText(
                     self.preview_details.text().replace(
@@ -1672,21 +1682,36 @@ class RobloxCacheTab(QWidget):
                 self.preview_stack.setCurrentWidget(self.preview_text)
             else:
                 sample = payload[:4096]
-                lines = [
-                    f'Unrecognized payload · {len(payload):,} bytes',
-                    f'Showing the first {len(sample):,} byte(s) as hexadecimal and ASCII.',
-                    '',
-                ]
-                for offset in range(0, len(sample), 16):
-                    block = sample[offset:offset + 16]
-                    hex_part = ' '.join(f'{byte:02x}' for byte in block)
-                    ascii_part = ''.join(
-                        chr(byte) if 32 <= byte < 127 else '.' for byte in block
+                decoded_sample = sample.decode('utf-8', errors='replace')
+                visible_chars = sum(
+                    character.isprintable() or character in '\\r\\n\\t'
+                    for character in decoded_sample
+                )
+                if decoded_sample and visible_chars / max(1, len(decoded_sample)) >= 0.85:
+                    self.preview_text.setPlainText(
+                        f'Unrecognized text payload · {len(payload):,} bytes\\n'
+                        'No known Roblox asset signature was found. Showing decoded text:\\n\\n'
+                        + decoded_sample[:4096]
+                        + ('\\n… more bytes omitted' if len(payload) > len(sample) else '')
                     )
-                    lines.append(f'{offset:08x}  {hex_part:<47}  |{ascii_part}|')
-                if len(payload) > len(sample):
-                    lines.append(f'… {len(payload) - len(sample):,} byte(s) omitted')
-                self.preview_text.setPlainText('\n'.join(lines))
+                else:
+                    lines = [
+                        f'Unrecognized binary payload · {len(payload):,} bytes',
+                        'No supported Roblox asset signature was found. This may be an opaque '
+                        'client resource or an incomplete/unknown binary format.',
+                        f'Showing the first {len(sample):,} byte(s) as hexadecimal and ASCII.',
+                        '',
+                    ]
+                    for offset in range(0, len(sample), 16):
+                        block = sample[offset:offset + 16]
+                        hex_part = ' '.join(f'{byte:02x}' for byte in block)
+                        ascii_part = ''.join(
+                            chr(byte) if 32 <= byte < 127 else '.' for byte in block
+                        )
+                        lines.append(f'{offset:08x}  {hex_part:<47}  |{ascii_part}|')
+                    if len(payload) > len(sample):
+                        lines.append(f'… {len(payload) - len(sample):,} byte(s) omitted')
+                    self.preview_text.setPlainText('\\n'.join(lines))
                 self.preview_stack.setCurrentWidget(self.preview_text)
         except Exception as exc:
             self.preview_info.setText(f'Preview failed: {type(exc).__name__}: {exc}')
