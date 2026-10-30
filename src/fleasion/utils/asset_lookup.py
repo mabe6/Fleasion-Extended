@@ -759,7 +759,7 @@ def download_cached_asset(
         if owns_session:
             client.close()
 
-)
+
 _ASSET_TYPE_NAMES = {
     1: 'Image',
     2: 'TShirt',
