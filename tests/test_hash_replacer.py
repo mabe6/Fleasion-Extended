@@ -6,7 +6,6 @@ from pathlib import Path
 
 import pytest
 
-from fleasion.database import hash_replacer_store as store_module
 from fleasion.database.hash_replacer_store import HashReplacerError, HashReplacerStore
 
 
