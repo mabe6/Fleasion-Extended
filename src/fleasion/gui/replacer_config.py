@@ -776,6 +776,7 @@ class ReplacerConfigWindow(QDialog):
             view_mode='slots',
         )
         self._scraper_db_tab = self._asset_explorer_tab
+        self._hash_replacer_tab.cache_changed.connect(self._scraper_db_tab.refresh)
         self.tab_widget.addTab(self._scraper_db_tab, 'Scraper DB')
 
         if self._mod_manager is not None:
