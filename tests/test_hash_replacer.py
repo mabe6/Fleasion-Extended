@@ -93,7 +93,7 @@ def test_import_asset_id_rejects_non_numeric_source(tmp_path: Path):
 
 
 
-def test_import_obj_converts_to_roblox_mesh_and_keeps_source_name(tmp_path: Path):
+def test_import_obj_converts_to_roblox_mesh_and_keeps_source_name(tmp_path: Path, monkeypatch):
     source = tmp_path / "fallen_wall.obj"
     source.write_text(
         "o triangle\n"
@@ -103,6 +103,9 @@ def test_import_obj_converts_to_roblox_mesh_and_keeps_source_name(tmp_path: Path
         "f 1 2 3\n",
         encoding="utf-8",
     )
+    from fleasion.cache.tools.solidmodel_converter import obj_to_mesh
+
+    monkeypatch.setattr(obj_to_mesh, "CONVERTED_MESHES_DIR", tmp_path / "ConvertedMeshes")
     store = HashReplacerStore(tmp_path / "HashReplacer")
 
     imported = store.import_paths([source])[0]
