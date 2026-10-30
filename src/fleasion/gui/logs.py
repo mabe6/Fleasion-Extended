@@ -4,8 +4,8 @@ from ..localization import tr
 
 import sys
 
-from PyQt6.QtCore import Qt, QTimer
-from PyQt6.QtGui import QColor, QKeySequence, QShortcut, QTextCharFormat, QTextCursor
+from PyQt6.QtCore import QUrl, Qt, QTimer
+from PyQt6.QtGui import QColor, QDesktopServices, QKeySequence, QShortcut, QTextCharFormat, QTextCursor
 from PyQt6.QtWidgets import (
     QApplication,
     QDialog,
@@ -17,7 +17,7 @@ from PyQt6.QtWidgets import (
     QVBoxLayout,
 )
 
-from ..utils import LOGS_DIR, get_icon_path, log_buffer, open_folder, time_tracker
+from ..utils import LOG_FILE, LOGS_DIR, get_icon_path, log_buffer, open_folder, time_tracker
 from ..utils.macos_proxy_helper import HELPER_LOG_DIR
 
 
@@ -72,6 +72,15 @@ class LogsWindow(QDialog):
         open_folder_btn.setFixedHeight(22)
         open_folder_btn.clicked.connect(lambda: open_folder(LOGS_DIR))
         bottom.addWidget(open_folder_btn)
+
+        open_log_btn = QPushButton('Open log file')
+        open_log_btn.setMinimumWidth(max(90, open_log_btn.sizeHint().width()))
+        open_log_btn.setFixedHeight(22)
+        open_log_btn.setToolTip(str(LOG_FILE))
+        open_log_btn.clicked.connect(
+            lambda: QDesktopServices.openUrl(QUrl.fromLocalFile(str(LOG_FILE)))
+        )
+        bottom.addWidget(open_log_btn)
 
         if sys.platform == 'darwin':
             bottom.addSpacing(6)

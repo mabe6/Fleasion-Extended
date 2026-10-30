@@ -290,7 +290,7 @@ def setup_logging(
     *,
     level: int = logging.INFO,
 ) -> LogBufferHandler:
-    """Install one root logging bridge and process-wide exception hooks."""
+    """Install one root logging bridge and register orderly shutdown."""
     global _logging_shutdown_registered
     target = buffer or log_buffer
     root = logging.getLogger()
@@ -311,7 +311,6 @@ def setup_logging(
     if root.level == logging.NOTSET or root.level > level:
         root.setLevel(level)
 
-    install_exception_hooks(target)
     if not _logging_shutdown_registered:
         atexit.register(target.close)
         _logging_shutdown_registered = True

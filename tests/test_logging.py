@@ -36,7 +36,7 @@ def test_log_file_rotates_at_one_mib_before_append(tmp_path, monkeypatch):
 def test_log_rotation_prunes_old_archives(tmp_path, monkeypatch):
     buffer, logs_dir, log_file = _make_buffer(tmp_path, monkeypatch)
     monkeypatch.setattr(fleasion_logging, "MAX_LOG_ARCHIVES", 2)
-    logs_dir.mkdir()
+    logs_dir.mkdir(exist_ok=True)
     for index in range(4):
         (logs_dir / f"fleasion-{index}.log").write_text(str(index), encoding="utf-8")
     log_file.write_bytes(b"x" * fleasion_logging.MAX_LOG_FILE_BYTES)
@@ -115,6 +115,7 @@ def test_unhandled_main_and_worker_exceptions_are_logged(tmp_path, monkeypatch):
     buffer, _logs_dir, log_file = _make_buffer(tmp_path, monkeypatch)
     original_sys_hook = sys.excepthook
     original_thread_hook = threading.excepthook
+    original_unraisable_hook = sys.unraisablehook
     monkeypatch.setattr(fleasion_logging, "_exception_hooks_installed", False)
     monkeypatch.setattr(sys, "excepthook", lambda *_args: None)
     monkeypatch.setattr(threading, "excepthook", lambda _args: None)
@@ -139,6 +140,7 @@ def test_unhandled_main_and_worker_exceptions_are_logged(tmp_path, monkeypatch):
     finally:
         sys.excepthook = original_sys_hook
         threading.excepthook = original_thread_hook
+        sys.unraisablehook = original_unraisable_hook
         fleasion_logging._exception_hooks_installed = False
 
     text = log_file.read_text(encoding="utf-8")
