@@ -8,6 +8,7 @@ import sqlite3
 import tempfile
 import time
 from dataclasses import replace
+from urllib.parse import urlsplit, urlunsplit
 from pathlib import Path
 
 from PyQt6.QtCore import QItemSelectionModel, QPoint, Qt, QThread, QTimer, pyqtSignal
@@ -1550,6 +1551,8 @@ class RobloxCacheTab(QWidget):
                     format_asset_metadata_preview(
                         payload,
                         asset_id=entry.asset_id or str(self._entry_metadata(entry).get('asset_id') or ''),
+                        resolved_metadata=self._entry_metadata(entry),
+                        source_url=entry.url,
                     )
                 )
                 self.preview_stack.setCurrentWidget(self.preview_text)
@@ -1894,8 +1897,13 @@ class RobloxCacheTab(QWidget):
             if isinstance(asset_names, dict):
                 for key in (
                     'name', 'creator_name', 'created_at', 'updated_at', 'description',
-                    'creator_type', 'creator_id', 'asset_type', 'price', 'price_status',
-                    'favorite_count', 'source',
+                    'creator_type', 'creator_id', 'asset_type', 'asset_type_id',
+                    'asset_type_label', 'asset_version', 'price', 'price_status',
+                    'favorite_count', 'source', 'cdn_hash', 'cdn_host',
+                    'cdn_probe_status', 'cdn_probe_note', 'cdn_content_type',
+                    'cdn_content_encoding', 'cdn_content_length', 'cdn_last_modified',
+                    'uncompressed_size', 'zstd_dictionary_sha256', 'etag',
+                    'metadata_lookup_note',
                 ):
                     value = metadata.get(key)
                     if value:
@@ -1924,12 +1932,28 @@ class RobloxCacheTab(QWidget):
                 details.append(f'Roblox asset type: {metadata["asset_type_label"]}')
             if metadata.get('asset_version'):
                 details.append(f'Asset version: {metadata["asset_version"]}')
+            if metadata.get('creator_name'):
+                details.append(f'Creator: {metadata["creator_name"]}')
+            if metadata.get('created_at'):
+                details.append(f'Created: {metadata["created_at"]}')
+            if metadata.get('updated_at'):
+                details.append(f'Updated: {metadata["updated_at"]}')
+            if metadata.get('cdn_content_type'):
+                details.append(f'CDN content type: {metadata["cdn_content_type"]}')
+            if metadata.get('cdn_content_encoding'):
+                details.append(f'CDN content encoding: {metadata["cdn_content_encoding"]}')
+            if metadata.get('uncompressed_size'):
+                details.append(f'Uncompressed size: {metadata["uncompressed_size"]}')
             if metadata.get('cdn_probe_status'):
                 details.append(f'CDN metadata: {metadata["cdn_probe_status"]}')
             if metadata.get('cdn_probe_note'):
                 details.append(str(metadata['cdn_probe_note']))
+            if metadata.get('metadata_lookup_note'):
+                details.append(str(metadata['metadata_lookup_note']))
             if entry.url:
-                details.append(f'URL: {entry.url}')
+                parsed_url = urlsplit(entry.url)
+                safe_url = urlunsplit((parsed_url.scheme, parsed_url.netloc, parsed_url.path, '', ''))
+                details.append(f'CDN resource: {safe_url}')
             self.preview_details.setText('\n'.join(details))
             row = self.table.currentRow()
             id_cell = self.table.item(row, 0) if row >= 0 else None
