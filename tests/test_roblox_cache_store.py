@@ -564,3 +564,63 @@ def test_hls_playlist_and_video_metadata_are_not_asset_ids() -> None:
     assert detect_roblox_payload_kind(playlist, url=playlist_url) == 'video-manifest'
     video_marker = b'roblox-assettypeid: 86\r\n'
     assert detect_roblox_payload_kind(video_marker, url=playlist_url) == 'video-metadata'
+
+
+def test_wrapped_zstd_prefix_is_decompressed_and_detected_as_csgphs(tmp_path):
+    import zstandard
+
+    csg_header = (
+        b'CSGPHS'
+        + struct.pack('<I', 8)
+        + b'\\x00\\x00'
+        + struct.pack(
+            '<9I6f',
+            1, 10, 5, 10, 5, 0, 0, 0, 120,
+            -1.0, -2.0, -3.0, 1.0, 2.0, 3.0,
+        )
+    )
+    csg_payload = csg_header + bytes(120)
+    compressed = zstandard.ZstdCompressor().compress(csg_payload)
+    wrapped = b'\\x7b\\x29\\xbe\\x18\\x00\\x00\\xb4\\x18\\x00\\x00' + compressed
+
+    assert store_module.is_roblox_compressed_payload(wrapped)
+    assert decompress_roblox_payload(wrapped) == csg_payload
+    assert detect_roblox_payload_kind(wrapped) == 'csgphs'
+    preview = store_module.format_csgphs_preview(csg_payload)
+    assert 'CSGPHS version 8' in preview
+    assert 'Convex hulls: 1' in preview
+    assert 'Vertices: 10' in preview
+
+    source = tmp_path / 'wrapped.zst'
+    destination = tmp_path / 'decoded.bin'
+    source.write_bytes(wrapped)
+    decompress_roblox_payload_file(source, destination)
+    assert destination.read_bytes() == csg_payload
+
+
+def test_roblox_asset_type_header_exposes_image_body_for_preview():
+    image = b'\\x89PNG\\r\\n\\x1a\\n' + bytes(64)
+    response = (
+        b'roblox-assettypeid: 1\\r\\n'
+        b'content-type: image/png\\r\\n'
+        b'\\r\\n'
+        + image
+    )
+
+    assert detect_roblox_payload_kind(response) == 'png'
+    extracted = store_module.extract_cached_http_response_asset_payload(response)
+    assert extracted is not None
+    body, kind, headers = extracted
+    assert body == image
+    assert kind == 'png'
+    assert headers['roblox-assettypeid'] == '1'
+    preview = store_module.format_cached_http_response_preview(response)
+    assert 'Roblox asset type: Image (1)' in preview
+
+
+def test_roblox_asset_type_header_does_not_require_two_known_headers():
+    response = b'roblox-assettypeid: 78\\r\\n\\r\\n'
+    parsed = store_module.parse_cached_http_response(response)
+    assert parsed is not None
+    assert parsed[0]['roblox-assettypeid'] == '78'
+    assert detect_roblox_payload_kind(response) == 'asset-metadata'
