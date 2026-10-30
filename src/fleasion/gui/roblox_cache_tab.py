@@ -89,6 +89,25 @@ def _format_size(value: int | None) -> str:
 
 
 
+class _CacheScanWorker(QThread):
+    """Scan local cache metadata away from the GUI thread."""
+
+    completed = pyqtSignal(object, object, str)
+
+    def __init__(self, root: str, parent=None):
+        super().__init__(parent)
+        self.root = root
+
+    def run(self) -> None:
+        try:
+            store = RobloxCacheStore(self.root)
+            entries = store.scan()
+        except Exception as exc:
+            self.completed.emit(None, [], f'{type(exc).__name__}: {exc}')
+            return
+        self.completed.emit(store, entries, '')
+
+
 class _CacheEntryPreviewWorker(QThread):
     """Read and decode one cache entry after the user selects it."""
 
@@ -117,6 +136,11 @@ class _CacheEntryPreviewWorker(QThread):
                     prefix = handle.read(8192)
                 kind = detect_roblox_payload_kind(prefix)
                 payload = decoded_path.read_bytes()
+                if kind == 'mesh':
+                    from ..cache.mesh_processing import is_mesh_data
+
+                    if not is_mesh_data(payload):
+                        kind = 'other'
                 if kind == 'xml' and b'CurveAnimation' in payload:
                     kind = 'curve-anim'
                 elif kind == 'xml' and b'KeyframeSequence' in payload:
@@ -158,6 +182,14 @@ class RobloxCacheTab(QWidget):
         self._current_preview_image: QImage | None = None
         self._current_preview_request_id = ''
         self._preview_workers: set[_CacheEntryPreviewWorker] = set()
+        self._scan_worker: _CacheScanWorker | None = None
+        self._scan_pending = False
+        settings = getattr(config_manager, 'settings', {})
+        cached_metadata = (
+            settings.get('local_db_cache_metadata', {})
+            if isinstance(settings, dict) else {}
+        )
+        self._cache_metadata = dict(cached_metadata) if isinstance(cached_metadata, dict) else {}
         self._name_resolver = None
         self._name_resolution_attempted: set[str] = set()
         self._name_resolution_disabled = False
@@ -321,9 +353,9 @@ class RobloxCacheTab(QWidget):
         browse_button = QPushButton('Browse…')
         browse_button.clicked.connect(self._browse_root)
         path_row.addWidget(browse_button)
-        refresh_button = QPushButton('Scan Cache')
-        refresh_button.clicked.connect(self.refresh)
-        path_row.addWidget(refresh_button)
+        self.scan_button = QPushButton('Scan Cache')
+        self.scan_button.clicked.connect(self.refresh)
+        path_row.addWidget(self.scan_button)
         entries_layout.addLayout(path_row)
 
         search_row = QHBoxLayout()
@@ -462,6 +494,10 @@ class RobloxCacheTab(QWidget):
         export_button = QPushButton('Export Entry…')
         export_button.clicked.connect(self._export_selected)
         inventory_actions.addWidget(export_button)
+        self.asset_lookup_button = QPushButton('Asset Lookup…')
+        self.asset_lookup_button.setEnabled(False)
+        self.asset_lookup_button.clicked.connect(self._open_asset_lookup)
+        inventory_actions.addWidget(self.asset_lookup_button)
         self.probe_button = QPushButton('Probe Header')
         self.probe_button.clicked.connect(self._probe_header)
         inventory_actions.addWidget(self.probe_button)
@@ -743,23 +779,35 @@ class RobloxCacheTab(QWidget):
     def _selection_changed(self) -> None:
         entry_id = self._selected_entry_id()
         if not entry_id:
+            self.asset_lookup_button.setEnabled(False)
             self._reset_slot_preview()
             return
         entry = self.entries_by_id.get(entry_id)
         if entry is None:
+            self.asset_lookup_button.setEnabled(False)
             self._reset_slot_preview()
             return
+        self.asset_lookup_button.setEnabled(True)
         display_name = self._entry_name(entry)
+        cached = self._cache_metadata.get(entry_id, {})
         self.preview_title.setText(display_name or f'{entry.kind.upper()} · {entry.entry_id[:12]}')
         details = [
-            f'Asset ID: {entry.asset_id or "not found"}',
+            f'Asset ID: {entry.asset_id or cached.get("asset_id") or "not found"}',
             f'Type: {entry.kind}',
-            f'Name: {display_name or "not stored in local metadata"}',
+            f'Name: {display_name or cached.get("name") or "not stored in local metadata"}',
             f'File/content size: {_format_size(entry.file_size)}',
             f'Database size: {_format_size(entry.database_size)}',
             f'Swap status: {entry.swap_status or "unmodified"}',
             f'Storage: {entry.storage_mode}',
         ]
+        if cached.get('asset_type_label'):
+            details.append(f'Roblox asset type: {cached["asset_type_label"]}')
+        if cached.get('asset_version'):
+            details.append(f'Asset version: {cached["asset_version"]}')
+        if cached.get('cdn_probe_status'):
+            details.append(f'CDN metadata: {cached["cdn_probe_status"]}')
+        if cached.get('cdn_probe_note'):
+            details.append(str(cached['cdn_probe_note']))
         if entry.url:
             details.append(f'URL: {entry.url}')
         self.preview_details.setText('\n'.join(details))
@@ -868,6 +916,9 @@ class RobloxCacheTab(QWidget):
                 )
                 self.preview_stack.setCurrentWidget(self.preview_info)
                 self._mesh_loader.start()
+            elif kind == 'asset-metadata':
+                self.preview_text.setPlainText(payload.decode('ascii', errors='replace').strip())
+                self.preview_stack.setCurrentWidget(self.preview_text)
             elif kind in {'anim', 'curve-anim'}:
                 from ..cache.animation_viewer import AnimationViewerPanel
 
@@ -1058,28 +1109,128 @@ class RobloxCacheTab(QWidget):
                 )
 
     def refresh(self) -> None:
+        """Start a metadata-only cache scan without freezing the desktop UI."""
+        if self._scan_worker is not None and self._scan_worker.isRunning():
+            self._scan_pending = True
+            return
+
         root = self.root_edit.text().strip().strip('"')
-        try:
-            self.store = RobloxCacheStore(root)
-            self.entries = self.store.scan()
-            self.entries_by_id = {entry.entry_id: entry for entry in self.entries}
-        except (RobloxCacheError, OSError) as exc:
+        self.scan_button.setEnabled(False)
+        self.scan_button.setText('Scanning…')
+        self.status_label.setText('Scanning cache metadata…')
+        worker = _CacheScanWorker(root, self)
+        self._scan_worker = worker
+        worker.completed.connect(self._on_scan_completed)
+        worker.finished.connect(
+            lambda current=worker: self._on_scan_worker_finished(current)
+        )
+        worker.start()
+
+    def _on_scan_completed(self, store: object, entries: object, error: str) -> None:
+        if error or not isinstance(store, RobloxCacheStore) or not isinstance(entries, list):
             self.entries = []
             self.entries_by_id = {}
             self._render_entries()
             self._render_active_swaps()
-            self.status_label.setText(str(exc))
+            self.status_label.setText(error or 'Cache scan returned an invalid result.')
             return
+
+        self.store = store
+        self.entries = entries
+        self.entries_by_id = {entry.entry_id: entry for entry in entries}
         self._render_entries()
         self._render_active_swaps()
-        self._resolve_cache_names()
         active_swaps = sum(bool(entry.swap_status) for entry in self.entries)
         self.status_label.setText(
             f'Scanned {len(self.entries):,} cache entry/entries. '
             f'{active_swaps} slot(s) have swap state. '
-            'Writes are blocked while Roblox Player, Studio or Sober is running.'
+            'Asset metadata is fetched only when you open Asset Lookup.'
         )
         log_buffer.log('LocalCache', f'Scanned {len(self.entries)} entries at {self.store.root}')
+
+    def _on_scan_worker_finished(self, worker: _CacheScanWorker) -> None:
+        if self._scan_worker is worker:
+            self._scan_worker = None
+            self.scan_button.setEnabled(True)
+            self.scan_button.setText('Scan Cache')
+        worker.deleteLater()
+        if self._scan_pending:
+            self._scan_pending = False
+            QTimer.singleShot(0, self.refresh)
+
+    def _open_asset_lookup(self) -> None:
+        entry_id = self._selected_entry_id()
+        if not entry_id or entry_id not in self.entries_by_id:
+            return
+        from .asset_lookup_dialog import AssetLookupDialog
+
+        entry = self.entries_by_id[entry_id]
+        cached = self._cache_metadata.get(entry_id, {})
+        dialog = AssetLookupDialog(
+            self,
+            entry_id=entry_id,
+            store=self.store,
+            initial_asset_id=entry.asset_id or str(cached.get('asset_id') or ''),
+            initial_metadata=cached,
+            on_metadata=self._save_cache_metadata,
+        )
+        dialog.exec()
+
+    def _save_cache_metadata(self, entry_id: str, metadata: dict[str, str]) -> None:
+        settings = getattr(self.config_manager, 'settings', None)
+        if not isinstance(settings, dict):
+            return
+        cached = self._cache_metadata.setdefault(entry_id, {})
+        cached.update({str(key): str(value) for key, value in metadata.items() if value is not None})
+        settings['local_db_cache_metadata'] = dict(list(self._cache_metadata.items())[-20000:])
+
+        asset_id = str(metadata.get('asset_id') or '').strip()
+        if asset_id.isdigit():
+            names = settings.get('local_db_asset_names', {})
+            if not isinstance(names, dict):
+                names = {}
+            asset_names = names.setdefault(asset_id, {})
+            if isinstance(asset_names, dict):
+                for key in (
+                    'name', 'creator_name', 'created_at', 'updated_at', 'description',
+                    'creator_type', 'creator_id', 'asset_type', 'price', 'price_status',
+                    'favorite_count', 'source',
+                ):
+                    value = metadata.get(key)
+                    if value:
+                        asset_names[key] = str(value)
+                settings['local_db_asset_names'] = names
+
+        save = getattr(self.config_manager, 'save', None)
+        if callable(save):
+            try:
+                save()
+            except Exception as exc:
+                log_buffer.log('LocalCache', f'Could not persist cache asset metadata: {exc}')
+
+        entry = self.entries_by_id.get(entry_id)
+        if entry is not None:
+            details = [
+                f'Asset ID: {metadata.get("asset_id") or entry.asset_id or "not found"}',
+                f'Type: {entry.kind}',
+                f'Name: {metadata.get("name") or self._entry_name(entry) or "not stored in local metadata"}',
+                f'File/content size: {_format_size(entry.file_size)}',
+                f'Database size: {_format_size(entry.database_size)}',
+                f'Swap status: {entry.swap_status or "unmodified"}',
+                f'Storage: {entry.storage_mode}',
+            ]
+            if metadata.get('asset_type_label'):
+                details.append(f'Roblox asset type: {metadata["asset_type_label"]}')
+            if metadata.get('asset_version'):
+                details.append(f'Asset version: {metadata["asset_version"]}')
+            if metadata.get('cdn_probe_status'):
+                details.append(f'CDN metadata: {metadata["cdn_probe_status"]}')
+            if metadata.get('cdn_probe_note'):
+                details.append(str(metadata['cdn_probe_note']))
+            if entry.url:
+                details.append(f'URL: {entry.url}')
+            self.preview_details.setText('\n'.join(details))
+        self._render_entries()
 
     def _resolve_cache_names(self) -> None:
         """Resolve cached asset names in the background, sharing the Asset Database cache."""
@@ -1173,6 +1324,11 @@ class RobloxCacheTab(QWidget):
             QTimer.singleShot(100, self._resolve_cache_names)
 
     def _shutdown_workers(self) -> None:
+        scan_worker = self._scan_worker
+        if scan_worker is not None and scan_worker.isRunning():
+            scan_worker.requestInterruption()
+            scan_worker.wait()
+        self._scan_worker = None
         self._stop_name_resolver()
         workers = tuple(self._preview_workers)
         for worker in workers:
