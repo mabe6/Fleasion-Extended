@@ -1,5 +1,6 @@
 > [!IMPORTANT]
 > Btw everything is happening in the branches rn when it's done i will push it
+> 
 > Roblox has patched the original Fleasion, and its proxy functionality currently does not work. **Fleasion-Extended** is a community-driven fork focused on improving asset previews, animation tools, external asset importing, and cache management.
 >
 > These improvements do not automatically restore the patched proxy functionality. There is **no confirmed ETA** for a fix.
