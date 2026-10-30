@@ -273,3 +273,105 @@ def test_cache_asset_type_filter_popup_is_searchable_multi_select_and_scrollable
     finally:
         popup.close()
         app.processEvents()
+
+
+def test_asset_explorer_metadata_update_keeps_selected_cache_entry(monkeypatch, tmp_path):
+    app = _qapp()
+
+    class FakeStore:
+        def __init__(self, *_args, **_kwargs):
+            self.root = tmp_path
+
+        def _manifest(self):
+            return {}
+
+        def swap_status(self, _entry_id):
+            return ''
+
+    monkeypatch.setattr(cache_tab_module, 'RobloxCacheStore', FakeStore)
+    widget = cache_tab_module.RobloxCacheTab(
+        config_manager=SimpleNamespace(settings={}),
+        view_mode='slots',
+    )
+    try:
+        widget.entries = [
+            RobloxCacheEntry(
+                entry_id='a' * 32, file_size=80, database_size=80, modified_at=1,
+                kind='rbxm', url='', asset_id='', has_rbxh_header=False,
+                swap_status='', storage_mode='database',
+            ),
+            RobloxCacheEntry(
+                entry_id='b' * 32, file_size=90, database_size=90, modified_at=2,
+                kind='png', url='', asset_id='', has_rbxh_header=False,
+                swap_status='', storage_mode='database',
+            ),
+        ]
+        widget.entries_by_id = {entry.entry_id: entry for entry in widget.entries}
+        widget._render_entries()
+        widget._load_slot_preview = lambda _entry: None
+        widget.table.selectRow(1)
+        selected_id = widget._selected_entry_id()
+        assert selected_id == 'b' * 32
+
+        widget._save_cache_metadata('b' * 32, {'name': 'Texture Atlas'})
+        assert widget._selected_entry_id() == selected_id
+        assert widget.table.item(widget.table.currentRow(), 9).text() == 'Texture Atlas'
+
+        widget._render_entries()
+        assert widget._selected_entry_id() == selected_id
+    finally:
+        widget.close()
+        app.processEvents()
+
+
+def test_asset_explorer_rbxm_preview_lists_full_nested_animation_paths(monkeypatch, tmp_path):
+    app = _qapp()
+
+    class FakeStore:
+        def __init__(self, *_args, **_kwargs):
+            self.root = tmp_path
+
+        def _manifest(self):
+            return {}
+
+        def swap_status(self, _entry_id):
+            return ''
+
+    monkeypatch.setattr(cache_tab_module, 'RobloxCacheStore', FakeStore)
+    widget = cache_tab_module.RobloxCacheTab(
+        config_manager=SimpleNamespace(settings={}),
+        view_mode='slots',
+    )
+    try:
+        entry = RobloxCacheEntry(
+            entry_id='c' * 32, file_size=256, database_size=256, modified_at=1,
+            kind='rbxm', url='', asset_id='', has_rbxh_header=False,
+            swap_status='', storage_mode='database',
+        )
+        widget.entries = [entry]
+        widget.entries_by_id = {entry.entry_id: entry}
+        widget._render_entries()
+        widget._load_slot_preview = lambda _entry: None
+        widget.table.selectRow(0)
+        widget._current_preview_request_id = entry.entry_id
+
+        xml = b'''<roblox version="4">
+          <Item class="Folder" referent="RBX0">
+            <Properties><string name="Name">r15artstintent</string></Properties>
+            <Item class="Folder" referent="RBX1">
+              <Properties><string name="Name">mood</string></Properties>
+              <Item class="KeyframeSequence" referent="RBX2">
+                <Properties><string name="Name">Idle</string></Properties>
+              </Item>
+            </Item>
+          </Item>
+        </roblox>'''
+        widget._on_slot_payload_ready(entry.entry_id, xml, 'rbxm')
+
+        assert widget._selected_entry_id() == entry.entry_id
+        assert widget.preview_stack.currentWidget() is widget._model_panel
+        assert widget.preview_title.text() == 'r15artstintent'
+        assert 'r15artstintent / mood / Idle' in widget.preview_details.text()
+    finally:
+        widget.close()
+        app.processEvents()
