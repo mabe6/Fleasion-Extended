@@ -36,7 +36,7 @@ def _entry(cache_hash: str, asset_id: str = "", kind: str = "mesh"):
 
 
 def test_legacy_profile_conversion_maps_ids_to_hashes_and_converts_obj(
-    tmp_path: Path,
+    tmp_path: Path, monkeypatch,
 ):
     obj = tmp_path / "replacement.obj"
     obj.write_text(
@@ -47,6 +47,9 @@ def test_legacy_profile_conversion_maps_ids_to_hashes_and_converts_obj(
         "f 1 2 3\n",
         encoding="utf-8",
     )
+    from fleasion.cache.tools.solidmodel_converter import obj_to_mesh
+
+    monkeypatch.setattr(obj_to_mesh, "CONVERTED_MESHES_DIR", tmp_path / "ConvertedMeshes")
     original_config = tmp_path / "fallen.json"
     original_bytes = json.dumps(
         {
@@ -162,7 +165,12 @@ def test_legacy_conversion_skips_proxy_only_modes_and_preserves_existing_hash_pr
     assert store.load_config("Default")["rules"] == []
 
 
-def test_obj_conversion_deduplicates_the_same_local_source_across_rules(tmp_path: Path):
+def test_obj_conversion_deduplicates_the_same_local_source_across_rules(
+    tmp_path: Path, monkeypatch,
+):
+    from fleasion.cache.tools.solidmodel_converter import obj_to_mesh
+
+    monkeypatch.setattr(obj_to_mesh, "CONVERTED_MESHES_DIR", tmp_path / "ConvertedMeshes")
     obj = tmp_path / "shared.obj"
     obj.write_text(
         "v 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 3\n",
