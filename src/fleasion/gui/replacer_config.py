@@ -1238,9 +1238,8 @@ class ReplacerConfigWindow(QDialog):
         footer_layout = QHBoxLayout(footer_widget)
         footer_layout.setContentsMargins(8, 4, 8, 4)
 
-        self._configs_path_label = _ElidedLabel(
-            tr('ui.gui.replacer_config.configs_value', value0=self.config_manager.configs_folder)
-        )
+        self._configs_path_label = _ElidedLabel('Configs folder')
+        self._configs_path_label.setToolTip(str(self.config_manager.configs_folder))
         self._configs_path_label.setStyleSheet(
             'color: gray; font-size: 8pt; padding-left: 5px;'
         )
@@ -1271,9 +1270,7 @@ class ReplacerConfigWindow(QDialog):
     def _open_configs_folder(self):
         """Open the same config folder used by this window's ConfigManager."""
         configs_folder = self.config_manager.configs_folder
-        self._configs_path_label.set_full_text(
-            tr('ui.gui.replacer_config.configs_value', value0=configs_folder)
-        )
+        self._configs_path_label.setToolTip(str(configs_folder))
         open_folder(configs_folder)
 
     def _clear_roblox_cache(self):
@@ -1353,7 +1350,9 @@ class ReplacerConfigWindow(QDialog):
             name for name in self.config_manager.enabled_configs if name not in visible
         ]
         if not enabled:
-            self.enabled_menu_btn.setText(tr('ui.gui.replacer_config.no_configs_enabled'))
+            # Keep the compact button readable in every supported language.
+            self.enabled_menu_btn.setText(tr('ui.gui.replacer_config.select'))
+            self.enabled_menu_btn.setToolTip(tr('ui.gui.replacer_config.no_configs_enabled'))
         elif len(enabled) == 1:
             self.enabled_menu_btn.setText(enabled[0])
         else:
