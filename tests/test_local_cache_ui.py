@@ -109,11 +109,16 @@ def test_cache_slots_view_has_preview_and_type_status_filters(monkeypatch, tmp_p
         config_manager=SimpleNamespace(settings={}),
         view_mode='slots',
     )
+    widget.resize(1200, 700)
+    widget.show()
+    app.processEvents()
     try:
         assert widget.layout().indexOf(widget.entries_page) >= 0
         assert not widget.entries_page.isHidden()
         assert widget.layout().indexOf(widget.pages) == -1
         assert widget.preview_panel is not None
+        assert widget.preview_panel.isHidden()
+        assert widget.entries_splitter.sizes()[1] == 0
         assert widget.asset_lookup_button.text() == 'Asset Lookup…'
         assert not widget.asset_lookup_button.isEnabled()
         assert widget.stop_preview_button.isHidden()
@@ -147,23 +152,34 @@ def test_cache_slots_view_has_preview_and_type_status_filters(monkeypatch, tmp_p
         assert widget.table.rowCount() == 2
         widget.table.selectRow(0)
         assert not widget.stop_preview_button.isHidden()
+        app.processEvents()
+        assert not widget.preview_panel.isHidden()
+        assert widget.entries_splitter.sizes()[1] > 0
         assert preview_calls[-1] == 'a' * 32
 
         widget.set_preview_enabled(False)
+        app.processEvents()
         assert widget.preview_panel.isHidden()
+        assert widget.entries_splitter.sizes()[1] == 0
         assert widget.stop_preview_button.isHidden()
         widget.set_preview_enabled(True)
+        app.processEvents()
         assert not widget.preview_panel.isHidden()
+        assert widget.entries_splitter.sizes()[1] > 0
         assert not widget.stop_preview_button.isHidden()
         assert preview_calls[-1] == 'a' * 32
 
         widget._stop_preview()
+        app.processEvents()
         assert widget.stop_preview_button.isHidden()
         assert widget.preview_panel.isHidden()
+        assert widget.entries_splitter.sizes()[1] == 0
         row_item = widget.table.item(0, 0)
         widget._cache_entry_clicked(row_item)
         assert not widget.stop_preview_button.isHidden()
         assert not widget.preview_panel.isHidden()
+        app.processEvents()
+        assert widget.entries_splitter.sizes()[1] > 0
         assert preview_calls[-1] == 'a' * 32
 
         widget._on_kind_filters_changed({'ktx'})

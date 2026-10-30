@@ -561,7 +561,7 @@ class RobloxCacheTab(QWidget):
         self.table.itemClicked.connect(self._cache_entry_clicked)
 
         self.entries_splitter = QSplitter(Qt.Orientation.Horizontal)
-        self.entries_splitter.setChildrenCollapsible(False)
+        self.entries_splitter.setChildrenCollapsible(True)
         table_host = QWidget()
         table_host_layout = QVBoxLayout(table_host)
         table_host_layout.setContentsMargins(0, 0, 0, 0)
@@ -614,6 +614,8 @@ class RobloxCacheTab(QWidget):
         self.preview_panel.setMinimumWidth(250)
         self.entries_splitter.addWidget(self.preview_panel)
         self.entries_splitter.setSizes([720, 320])
+        # Match upstream: no preview panel should consume width before an asset is selected.
+        self.preview_panel.hide()
         entries_layout.addWidget(self.entries_splitter, 1)
 
         paging_row = QHBoxLayout()
@@ -1003,6 +1005,7 @@ class RobloxCacheTab(QWidget):
             self.stop_preview_button.setVisible(False)
             self._preview_stopped = False
             self._reset_slot_preview()
+            self.preview_panel.hide()
             return
         entry = self.entries_by_id.get(entry_id)
         if entry is None:
@@ -1010,6 +1013,7 @@ class RobloxCacheTab(QWidget):
             self.stop_preview_button.setVisible(False)
             self._preview_stopped = False
             self._reset_slot_preview()
+            self.preview_panel.hide()
             return
         self.asset_lookup_button.setEnabled(True)
         self.preview_panel.show()
