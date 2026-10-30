@@ -161,13 +161,55 @@ def decompress_roblox_payload_file(
 def parse_cached_http_response(payload: bytes) -> tuple[dict[str, str], bytes] | None:
     """Parse response headers embedded in a cache payload, if the bytes are a header block."""
     sample = payload[:65536]
-    separator = sample.find(b'\r\n\r\n')
+    separator = sample.find(b'\\r\\n\\r\\n')
     separator_size = 4
     if separator < 0:
-        separator = sample.find(b'\n\n')
+        separator = sample.find(b'\\n\\n')
         separator_size = 2
-    header_bytes = sample if separator < 0 else sample[:separator]
-    body_start = len(header_bytes) if separator < 0 else separator + separator_size
+
+    if separator >= 0:
+        header_bytes = sample[:separator]
+        body_start = separator + separator_size
+    else:
+        # Some cache variants omit the empty line before the response body. Consume
+        # consecutive syntactically valid header lines, then treat the first non-header
+        # line as body bytes. Only do this after seeing at least one valid header.
+        header_lines: list[bytes] = []
+        cursor = 0
+        body_start = len(payload)
+        saw_header = False
+        for raw_line in sample.splitlines(keepends=True):
+            line = raw_line.strip()
+            if not line:
+                cursor += len(raw_line)
+                body_start = cursor
+                break
+            if line.startswith((b'HTTP/1.', b'HTTP/2', b'HTTP/3')):
+                header_lines.append(raw_line.rstrip(b'\\r\\n'))
+                cursor += len(raw_line)
+                continue
+            if b':' not in line:
+                if saw_header:
+                    body_start = cursor
+                break
+            raw_key, raw_value = line.split(b':', 1)
+            try:
+                key = raw_key.decode('ascii').strip().casefold()
+            except UnicodeDecodeError:
+                key = ''
+            if not key or len(key) > 80 or not re.fullmatch(r'[a-z0-9-]+', key):
+                if saw_header:
+                    body_start = cursor
+                break
+            header_lines.append(raw_line.rstrip(b'\\r\\n'))
+            saw_header = True
+            cursor += len(raw_line)
+        if not saw_header:
+            return None
+        header_bytes = b'\\n'.join(header_lines)
+        if body_start == len(payload) and cursor < len(payload):
+            body_start = cursor
+
     headers: dict[str, str] = {}
     for raw_line in header_bytes.splitlines():
         line = raw_line.strip()
@@ -195,7 +237,7 @@ def parse_cached_http_response(payload: bytes) -> tuple[dict[str, str], bytes] |
     # A single recognised header is enough; the body is classified independently below.
     if not set(headers).intersection(recognised):
         return None
-    body = b'' if separator < 0 else payload[body_start:]
+    body = payload[body_start:] if body_start < len(payload) else b''
     return headers, body
 
 
