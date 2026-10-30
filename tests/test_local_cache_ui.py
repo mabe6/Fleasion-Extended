@@ -113,7 +113,10 @@ def test_cache_slots_view_has_preview_and_type_status_filters(monkeypatch, tmp_p
         assert not widget.entries_page.isHidden()
         assert widget.layout().indexOf(widget.pages) == -1
         assert widget.preview_panel is not None
+        assert widget.asset_lookup_button.text() == 'Asset Lookup…'
+        assert not widget.asset_lookup_button.isEnabled()
         assert widget.kind_filter_combo.findData('ktx') >= 0
+        assert widget.kind_filter_combo.findData('asset-metadata') >= 0
         assert widget.slot_status_filter.findData('swapped') >= 0
 
         widget.entries = [

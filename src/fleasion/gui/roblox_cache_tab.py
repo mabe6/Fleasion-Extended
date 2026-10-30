@@ -377,6 +377,7 @@ class RobloxCacheTab(QWidget):
             ('Audio', 'audio'),
             ('Fonts', 'font'),
             ('JSON', 'json'),
+            ('Asset metadata', 'asset-metadata'),
             ('Other', 'other'),
         ):
             self.kind_filter_combo.addItem(label, value)
@@ -595,12 +596,16 @@ class RobloxCacheTab(QWidget):
     def _entry_name(self, entry: RobloxCacheEntry) -> str:
         if entry.name:
             return entry.name
+        slot_metadata = self._cache_metadata.get(entry.entry_id, {})
+        if slot_metadata.get('name'):
+            return str(slot_metadata['name'])
         settings = getattr(self.config_manager, 'settings', {})
         cached_names = settings.get('local_db_asset_names', {}) if isinstance(settings, dict) else {}
-        if isinstance(cached_names, dict):
-            cached = cached_names.get(entry.asset_id, {})
-            if isinstance(cached, dict) and cached.get('name'):
-                return str(cached['name'])
+        asset_id = entry.asset_id or str(slot_metadata.get('asset_id') or '')
+        if isinstance(cached_names, dict) and asset_id:
+            metadata = cached_names.get(asset_id, {})
+            if isinstance(metadata, dict) and metadata.get('name'):
+                return str(metadata['name'])
         return ''
 
     def _visible_entries(self) -> list[RobloxCacheEntry]:
@@ -633,7 +638,7 @@ class RobloxCacheTab(QWidget):
                 for value in (
                     entry_name,
                     entry.entry_id,
-                    entry.asset_id,
+                    entry.asset_id or self._cache_metadata.get(entry.entry_id, {}).get('asset_id', ''),
                     entry.kind,
                     entry.url,
                     entry.swap_status or 'unmodified',
@@ -666,7 +671,10 @@ class RobloxCacheTab(QWidget):
                 elif key == 'id':
                     matches = value in entry.entry_id.casefold()
                 elif key == 'asset':
-                    matches = value in entry.asset_id.casefold()
+                    asset_id = entry.asset_id or str(
+                        self._cache_metadata.get(entry.entry_id, {}).get('asset_id') or ''
+                    )
+                    matches = value in asset_id.casefold()
                 elif key == 'url':
                     matches = value in entry.url.casefold()
                 elif key == 'status':
@@ -694,8 +702,11 @@ class RobloxCacheTab(QWidget):
                 continue
             if kind_filter == 'json' and entry.kind != 'json':
                 continue
+            if kind_filter == 'asset-metadata' and entry.kind != 'asset-metadata':
+                continue
             if kind_filter == 'other' and entry.kind in (
-                image_kinds | model_kinds | animation_kinds | audio_kinds | {'font', 'json', 'mesh'}
+                image_kinds | model_kinds | animation_kinds | audio_kinds
+                | {'font', 'json', 'mesh', 'asset-metadata'}
             ):
                 continue
 
@@ -749,7 +760,7 @@ class RobloxCacheTab(QWidget):
             self.table.insertRow(row)
             values = [
                 entry.entry_id,
-                entry.asset_id or '—',
+                entry.asset_id or self._cache_metadata.get(entry.entry_id, {}).get('asset_id') or '—',
                 entry.kind,
                 _format_size(entry.file_size),
                 _format_size(entry.database_size),
