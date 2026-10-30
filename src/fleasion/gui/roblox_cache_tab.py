@@ -778,29 +778,17 @@ class RobloxCacheTab(QWidget):
             self._send_hash_to_replacer()
 
     def _send_hash_to_replacer(self) -> None:
-        """Pass the selected 32-character cache hash to the new local Replacer."""
+        """Open the separate Asset Hash editor with this cache slot preselected."""
         cache_hash = self._selected_entry_id()
         if not cache_hash:
             return
         window = self.window()
-        hash_tab = getattr(window, '_hash_replacer_tab', None)
-        if hash_tab is None:
-            QMessageBox.information(
-                self,
-                'Cache hash',
-                f'Cache hash: {cache_hash}\\nCopy it and paste it into Replacer → Cache Hash.',
-            )
+        callback = getattr(window, '_open_hash_replacer_dialog', None)
+        if not callable(callback):
+            QMessageBox.information(self, 'Cache hash', f'Cache hash: {cache_hash}')
             return
-        # Keep the Replacer bound to the exact cache root selected in Scraper DB.
-        # This matters when the user browses a non-default Roblox cache location.
-        hash_tab.cache_store = self.store
-        hash_tab.set_target_hash(cache_hash)
-        tab_widget = getattr(window, 'tab_widget', None)
-        if tab_widget is not None:
-            tab_widget.setCurrentWidget(window._replacer_tab)
-        modes = getattr(window, '_replacer_modes', None)
-        if modes is not None:
-            modes.setCurrentWidget(hash_tab)
+        # Pass the exact store instance so custom cache roots remain consistent.
+        callback(cache_hash)
 
     def _set_selected_as_target(self) -> None:
         entry_id = self._selected_entry_id()
