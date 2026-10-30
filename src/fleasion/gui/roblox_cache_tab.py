@@ -768,7 +768,7 @@ class RobloxCacheTab(QWidget):
         copy_name_action = copy_menu.addAction('Name')
         copy_url_action = copy_menu.addAction('URL')
         menu.addSeparator()
-        send_to_replacer_action = menu.addAction('Use as Replacer target hash')
+        send_to_replacer_action = menu.addAction('Open Asset Hash editor with this target')
         copy_asset_id_action.setEnabled(any(
             (self.table.item(row, 1).text().strip() not in {"", "—"})
             for row in selected_rows
