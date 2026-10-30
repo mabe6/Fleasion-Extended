@@ -43,7 +43,6 @@ from PyQt6.QtWidgets import (
 
 from ..database.roblox_cache_store import (
     RobloxCacheStore,
-    decompress_roblox_payload,
     decompress_roblox_payload_file,
     detect_roblox_payload_kind,
     split_rbxh_entry,
