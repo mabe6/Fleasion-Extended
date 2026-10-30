@@ -315,7 +315,7 @@ class HashReplacerStore:
             except Exception:
                 cookie = None
             if cookie:
-                session.headers["Cookie"] = f".ROBLOSECURITY={cookie}"
+                session.cookies.set(".ROBLOSECURITY", cookie, domain=".roblox.com")
             try:
                 download_asset(value, temporary, session=session)
                 imported = self.import_paths([temporary])
