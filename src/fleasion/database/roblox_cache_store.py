@@ -542,10 +542,28 @@ def detect_roblox_payload_kind(payload: bytes, *, url: str = '') -> str:
     if payload.startswith((b'\x00\x01\x00\x00', b'OTTO', b'ttcf', b'wOFF', b'wOF2')):
         return 'font'
     if payload[:8] == b'<roblox!':
-        if b'KeyframeSequence' in payload:
-            return 'anim'
+        # Fast-path the uncompressed cases, then inspect serialized instance
+        # class names. RBXM chunks are commonly LZ4/Zstd compressed, so a
+        # byte search alone misses KeyframeSequence/CurveAnimation assets.
         if b'CurveAnimation' in payload:
             return 'curve-anim'
+        if b'KeyframeSequence' in payload:
+            return 'anim'
+        try:
+            from ..cache.tools.solidmodel_converter.rbxm.deserializer import RbxmDeserializer
+
+            document = RbxmDeserializer().deserialize(payload)
+            classes = {instance.class_name for instance in document.instances.values()}
+            if 'CurveAnimation' in classes:
+                return 'curve-anim'
+            if 'KeyframeSequence' in classes or (
+                'Keyframe' in classes and 'Pose' in classes
+            ):
+                return 'anim'
+        except Exception:
+            # An unrecognised or newer RBXM variant is still a valid generic
+            # binary Roblox document; do not mislabel it as "other".
+            pass
         return 'rbxm'
     if payload.startswith(b'\x89PNG'):
         return 'png'
