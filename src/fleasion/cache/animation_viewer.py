@@ -429,67 +429,103 @@ def load_animation_from_xml(anim_data: bytes) -> List[Keyframe]:
     return keys
 
 
+def _instance_property_value(instance, name: str, default=None):
+    """Read properties from either the lightweight or full RBXM deserializer."""
+    properties = getattr(instance, 'properties', {})
+    value = properties.get(name, default) if isinstance(properties, dict) else default
+    # The full serializer stores RbxProperty wrappers; the lightweight parser
+    # exposes already-unwrapped scalar/dict values.
+    return getattr(value, 'value', value)
+
+
 def load_animation_from_rbxm(anim_data: bytes) -> List[Keyframe]:
-    """Load animation from binary RBXM format."""
+    """Load KeyframeSequence data from binary RBXM.
+
+    Prefer the lightweight LZ4 parser for compatibility, then fall back to the
+    full document deserializer, which also supports Zstandard-compressed chunks.
+    """
+    instances = None
+    legacy_error = None
     try:
         from .rbxm_parser import find_by_class, parse_rbxm
-    except ImportError:
-        log_buffer.log('AnimationViewer', 'RBXM parser not available')
-        return []
 
-    try:
         instances = parse_rbxm(anim_data)
-
-        # Find all Keyframe instances
         keyframe_instances = find_by_class(instances, 'Keyframe')
-
-        if not keyframe_instances:
-            log_buffer.log('AnimationViewer', 'No Keyframe instances found in RBXM')
-            return []
-
         keys: List[Keyframe] = []
-
         for kf_inst in keyframe_instances:
-            # Get keyframe time
-            time_val = kf_inst.properties.get('Time', 0.0)
-            if isinstance(time_val, (int, float)):
-                t = float(time_val)
-            else:
-                t = 0.0
-
-            # Find all Pose children (recursively)
+            time_val = _instance_property_value(kf_inst, 'Time', 0.0)
+            t = float(time_val) if isinstance(time_val, (int, float)) else 0.0
             poses: Dict[str, np.ndarray] = {}
             _collect_poses(kf_inst, poses)
-
             if poses:
                 keys.append(Keyframe(t, poses))
+        if keys:
+            keys.sort(key=lambda key: key.time)
+            return keys
+    except Exception as exc:
+        legacy_error = exc
 
-        keys.sort(key=lambda k: k.time)
-        return keys
+    try:
+        from .tools.solidmodel_converter.rbxm.deserializer import RbxmDeserializer
 
-    except Exception as e:
-        log_buffer.log('AnimationViewer', f'Error parsing RBXM animation: {e}')
+        document = RbxmDeserializer().deserialize(anim_data)
+        keyframe_instances = [
+            instance
+            for instance in document.instances.values()
+            if instance.class_name == 'Keyframe'
+        ]
+        keys = []
+        for kf_inst in keyframe_instances:
+            time_val = _instance_property_value(kf_inst, 'Time', 0.0)
+            t = float(time_val) if isinstance(time_val, (int, float)) else 0.0
+            poses: Dict[str, np.ndarray] = {}
+            _collect_poses(kf_inst, poses)
+            if poses:
+                keys.append(Keyframe(t, poses))
+        keys.sort(key=lambda key: key.time)
+        if keys:
+            return keys
+        log_buffer.log('AnimationViewer', 'No playable Keyframe/Pose tracks found in RBXM')
+    except Exception as exc:
+        log_buffer.log(
+            'AnimationViewer',
+            f'Full RBXM deserializer failed: {type(exc).__name__}: {exc}',
+        )
+        if legacy_error is not None:
+            log_buffer.log(
+                'AnimationViewer',
+                f'Legacy RBXM parser also failed: {type(legacy_error).__name__}: {legacy_error}',
+            )
         import traceback
 
         log_buffer.log('AnimationViewer', traceback.format_exc())
-        return []
+    return []
 
 
 def _collect_poses(instance, poses: Dict[str, np.ndarray]):
-    """Recursively collect Pose instances from a Keyframe."""
+    """Recursively collect Pose instances from either RBXM deserializer."""
     for child in instance.children:
         if child.class_name == 'Pose':
-            name = child.properties.get('Name', '')
-            cframe = child.properties.get('CFrame')
-            weight = child.properties.get('Weight', 1.0)
+            name = _instance_property_value(child, 'Name', '')
+            cframe = _instance_property_value(child, 'CFrame')
+            weight = _instance_property_value(child, 'Weight', 1.0)
 
-            if name and cframe and isinstance(weight, (int, float)) and weight > 0:
-                # CFrame is a dict with 'position' and 'rotation'
-                pos = cframe.get('position', (0, 0, 0))
-                rot = cframe.get('rotation', [1, 0, 0, 0, 1, 0, 0, 0, 1])
-                poses[name] = mat_from_cframe(pos, rot)
+            if name and isinstance(cframe, dict) and isinstance(weight, (int, float)) and weight > 0:
+                # The lightweight parser uses position/rotation keys; the full
+                # reader uses Roblox's X/Y/Z/R00..R22 matrix fields.
+                if 'position' in cframe:
+                    pos = cframe.get('position', (0, 0, 0))
+                    rot = cframe.get('rotation', [1, 0, 0, 0, 1, 0, 0, 0, 1])
+                else:
+                    pos = (cframe.get('X', 0), cframe.get('Y', 0), cframe.get('Z', 0))
+                    rot = [
+                        cframe.get('R00', 1), cframe.get('R01', 0), cframe.get('R02', 0),
+                        cframe.get('R10', 0), cframe.get('R11', 1), cframe.get('R12', 0),
+                        cframe.get('R20', 0), cframe.get('R21', 0), cframe.get('R22', 1),
+                    ]
+                poses[str(name)] = mat_from_cframe(pos, rot)
 
-            # Recursively check for nested poses
+            # Pose trees may contain nested joints.
             _collect_poses(child, poses)
 
 
