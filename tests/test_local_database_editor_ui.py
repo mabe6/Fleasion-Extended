@@ -52,23 +52,20 @@ def test_local_database_browser_hides_sqlite_sidebar_and_keeps_advanced_tools(tm
         widget._add_database(database_path, open_now=True)
 
         assert [widget.tabs.tabText(index) for index in range(widget.tabs.count())] == [
-            'Asset Explorer',
-            'Advanced SQLite',
-        ]
-        assert [widget.advanced_tabs.tabText(index) for index in range(widget.advanced_tabs.count())] == [
             'Data',
             'Schema',
             'SQL (read-only)',
         ]
+        assert widget.advanced_tabs is widget.tabs
+        assert not hasattr(widget, 'asset_explorer')
+        assert widget.tabs.currentWidget() is widget.data_tab
         assert widget.database_combo.currentData() == str(database_path.resolve())
         assert widget.database_combo.count() == 1
         assert widget.database_list.isHidden()
         assert not hasattr(widget, 'table_list')
         assert widget.table_combo.currentData() == ('files', 'table')
-        assert widget.asset_explorer.database_path == database_path.resolve()
-
-        # Advanced access remains available but is no longer the default asset view.
-        widget.tabs.setCurrentWidget(widget.advanced_tabs)
+        # The Asset Explorer is now the sole asset inventory; this tab is only SQLite.
+        assert widget.tabs.currentWidget() is widget.data_tab
         metadata_index = next(
             index
             for index in range(widget.table_combo.count())
