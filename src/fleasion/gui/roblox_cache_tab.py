@@ -1472,15 +1472,6 @@ class RobloxCacheTab(QWidget):
             self.preview_details.setText(
                 self.preview_details.text().replace(f'Type: {old_kind}', f'Type: {kind}')
             )
-            row = self.table.currentRow()
-            id_cell = self.table.item(row, 0) if row >= 0 else None
-            if (
-                id_cell is not None
-                and str(id_cell.data(Qt.ItemDataRole.UserRole) or '') == request_id
-            ):
-                kind_cell = self.table.item(row, 2)
-                if kind_cell is not None:
-                    kind_cell.setText(kind)
             if not entry.asset_id and kind == 'roblox-settings':
                 self.preview_details.setText(
                     self.preview_details.text().replace(
