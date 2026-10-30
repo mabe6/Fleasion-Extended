@@ -44,6 +44,7 @@ from ..database.roblox_cache_store import (
     detect_roblox_cache_payload_kind,
     detect_roblox_payload_kind,
     decompress_roblox_payload_file,
+    extract_cached_http_response_asset_payload,
     format_cached_http_response_preview,
     split_rbxh_entry,
 )
@@ -138,6 +139,11 @@ class _CacheEntryPreviewWorker(QThread):
                     prefix = handle.read(8192)
                 kind = detect_roblox_payload_kind(prefix, url=source_url)
                 payload = decoded_path.read_bytes()
+                response_asset = extract_cached_http_response_asset_payload(
+                    payload, url=source_url
+                )
+                if response_asset is not None:
+                    payload, kind, _response_headers = response_asset
                 if kind == 'mesh':
                     from ..cache.mesh_processing import is_mesh_data
 
@@ -846,6 +852,10 @@ class RobloxCacheTab(QWidget):
             self._reset_slot_preview()
             return
         self.asset_lookup_button.setEnabled(True)
+        self.preview_panel.show()
+        self.preview_title.show()
+        self.preview_details.show()
+        self.preview_stack.show()
         self.stop_preview_button.setVisible(True)
         self._preview_stopped = False
         display_name = self._entry_name(entry)
@@ -905,8 +915,7 @@ class RobloxCacheTab(QWidget):
         self.stop_preview_button.setVisible(False)
         self._current_preview_request_id = ''
         self._reset_slot_preview()
-        self.preview_info.setText('Preview stopped. Click the selected cache entry again to reopen it.')
-        self.preview_stack.setCurrentWidget(self.preview_info)
+        self.preview_panel.hide()
 
     def _track_decoder_worker(self, attribute: str, worker: QThread) -> None:
         setattr(self, attribute, worker)
@@ -993,6 +1002,10 @@ class RobloxCacheTab(QWidget):
         self.preview_stack.setCurrentWidget(self.preview_info)
 
     def _load_slot_preview(self, entry: RobloxCacheEntry) -> None:
+        self.preview_panel.show()
+        self.preview_title.show()
+        self.preview_details.show()
+        self.preview_stack.show()
         self._reset_slot_preview()
         self._current_preview_request_id = entry.entry_id
         self.preview_info.setText('Reading cache entry and decoding preview…')
@@ -1039,7 +1052,15 @@ class RobloxCacheTab(QWidget):
                         'Asset ID: not applicable (video resource)',
                     )
                 )
-            self._render_entries()
+            row = self.table.currentRow()
+            id_cell = self.table.item(row, 0) if row >= 0 else None
+            if (
+                id_cell is not None
+                and str(id_cell.data(Qt.ItemDataRole.UserRole) or '') == request_id
+            ):
+                kind_cell = self.table.item(row, 2)
+                if kind_cell is not None:
+                    kind_cell.setText(kind)
         try:
             if kind in _IMAGE_KINDS:
                 if kind == 'ktx':
