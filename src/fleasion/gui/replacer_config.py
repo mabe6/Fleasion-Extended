@@ -939,14 +939,14 @@ class ReplacerConfigWindow(QDialog):
         self._create_edit_section(replacer_layout)
         self._create_footer(replacer_layout)
 
-        modes.addTab(self._asset_id_replacer_tab, 'Asset ID (legacy)')
-
-        # Hash profiles and their imported source library are completely
-        # separate from the legacy configs/ folder and need no HTTP proxy.
+        # Hash mode comes first because it is local and does not rely on the
+        # unavailable HTTP interception path. The legacy Asset-ID editor stays
+        # available on the second page with its original configs untouched.
         from .hash_replacer_tab import HashReplacerTab
 
         self._hash_replacer_tab = HashReplacerTab(self, asset_store=self._hash_replacer_store)
         modes.addTab(self._hash_replacer_tab, 'Cache Hash')
+        modes.addTab(self._asset_id_replacer_tab, 'Asset ID (legacy)')
 
         outer_layout.addWidget(modes)
         return replacer_widget
