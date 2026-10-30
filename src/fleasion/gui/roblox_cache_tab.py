@@ -907,6 +907,10 @@ class RobloxCacheTab(QWidget):
         if entry is None:
             return
         self._preview_stopped = False
+        self.preview_panel.show()
+        self.preview_title.show()
+        self.preview_details.show()
+        self.preview_stack.show()
         self.stop_preview_button.setVisible(True)
         self._load_slot_preview(entry)
 
