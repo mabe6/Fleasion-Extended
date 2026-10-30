@@ -1725,12 +1725,32 @@ class RobloxCacheTab(QWidget):
                 self.preview_text.setPlainText(pretty_xml[:200_000])
                 self.preview_stack.setCurrentWidget(self.preview_text)
             elif kind == 'json' or payload.lstrip().startswith((b'{', b'[')):
-                try:
-                    parsed = json.loads(payload.decode('utf-8-sig'))
-                    text = json.dumps(parsed, ensure_ascii=False, indent=2)
-                except (UnicodeDecodeError, json.JSONDecodeError):
-                    text = payload[:50_000].decode('utf-8', errors='replace')
-                self.preview_text.setPlainText(text[:200_000])
+                from ..utils.asset_lookup import (
+                    _cache_header_metadata,
+                    format_asset_metadata_preview,
+                )
+
+                json_metadata = _cache_header_metadata(payload)
+                if json_metadata and any(
+                    key in json_metadata
+                    for key in ('asset_id', 'asset_type_id', 'name', 'creator_name')
+                ):
+                    cached_metadata = self._entry_metadata(entry)
+                    self.preview_text.setPlainText(
+                        format_asset_metadata_preview(
+                            payload,
+                            asset_id=entry.asset_id or str(cached_metadata.get('asset_id') or ''),
+                            resolved_metadata=cached_metadata,
+                            source_url=entry.url,
+                        )
+                    )
+                else:
+                    try:
+                        parsed = json.loads(payload.decode('utf-8-sig'))
+                        text = json.dumps(parsed, ensure_ascii=False, indent=2)
+                    except (UnicodeDecodeError, json.JSONDecodeError):
+                        text = payload[:50_000].decode('utf-8', errors='replace')
+                    self.preview_text.setPlainText(text[:200_000])
                 self.preview_stack.setCurrentWidget(self.preview_text)
             elif kind == 'xml':
                 self.preview_text.setPlainText(payload[:200_000].decode('utf-8', errors='replace'))
