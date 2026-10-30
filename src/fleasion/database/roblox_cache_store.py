@@ -390,8 +390,68 @@ def split_rbxh_entry(data: bytes) -> tuple[str, bytes, bool]:
         return '', data, False
 
 
+def _looks_like_json_prefix(payload: bytes) -> bool:
+    """Reject binary wrappers that happen to begin with '{' or '['."""
+    sample = payload.lstrip(b'\xef\xbb\xbf \t\r\n')
+    if sample.startswith(b'{'):
+        return re.match(rb'^\{\s*"[^"\\]*(?:\\.[^"\\]*)*"\s*:', sample[:512]) is not None
+    if sample.startswith(b'['):
+        tail = sample[1:].lstrip(b' \t\r\n')
+        return not tail or tail[:1] in (b']', b'{', b'[', b'"', b'-') or tail[:1].isdigit() or tail.startswith((b'true', b'false', b'null'))
+    return False
+
+
+def format_csgphs_preview(payload: bytes) -> str:
+    """Summarise the public CSGPHS collision-mesh header without guessing its geometry."""
+    if not payload.startswith(b'CSGPHS') or len(payload) < 10:
+        return f'Unrecognised CSGPHS payload · {len(payload):,} bytes'
+    version = struct.unpack_from('<I', payload, 6)[0]
+    lines = [
+        'Roblox physics / collision mesh',
+        f'Format: CSGPHS version {version}',
+        f'Payload size: {len(payload):,} bytes',
+    ]
+    if version != 8:
+        lines.append('This version is recognised, but its geometry layout is not decoded by this preview.')
+        return '\n'.join(lines)
+    if len(payload) < 72:
+        lines.append('The version 8 header is truncated; geometry metadata is unavailable.')
+        return '\n'.join(lines)
+    values = struct.unpack_from('<9I6f', payload, 12)
+    (
+        hull_count, total_vertices, total_faces, first_hull_vertices, first_hull_faces,
+        raw_geometry_size, clers_bit_count, clers_buffer_size, vertices_size,
+        min_x, min_y, min_z, max_x, max_y, max_z,
+    ) = values
+    lines.extend([
+        f'Convex hulls: {hull_count:,}',
+        f'Vertices: {total_vertices:,} · triangles: {total_faces:,}',
+        f'First hull: {first_hull_vertices:,} vertices · {first_hull_faces:,} faces',
+        f'Raw fallback geometry: {raw_geometry_size:,} bytes',
+        f'CLERS stream: {clers_bit_count:,} bits · {clers_buffer_size:,} bytes',
+        f'Vertex block: {vertices_size:,} bytes',
+        f'Bounds: ({min_x:.4g}, {min_y:.4g}, {min_z:.4g}) → ({max_x:.4g}, {max_y:.4g}, {max_z:.4g})',
+    ])
+    expected_size = 72 + raw_geometry_size + clers_buffer_size + vertices_size
+    lines.append(
+        f'Body layout: {"complete" if expected_size <= len(payload) else "truncated or has extra data"} '
+        f'· header-derived size {expected_size:,} bytes'
+    )
+    lines.append('The current viewer reports collision geometry metadata; it does not yet reconstruct the CSGPHS8 hulls as a 3D model.')
+    return '\n'.join(lines)
+
+
 def detect_roblox_payload_kind(payload: bytes, *, url: str = '') -> str:
     """Detect cache payload formats, including non-asset Roblox HTTP resources."""
+    # A few Roblox cache entries prepend a 8/10/12/16-byte size wrapper before Zstd.
+    # Classify the decompressed content, not its arbitrary first byte (which may be '{').
+    zstd_offset = _zstd_frame_offset(payload)
+    if zstd_offset not in (None, 0):
+        decoded_prefix = decompress_roblox_payload_prefix(payload, max_output_bytes=ENTRY_HEAD_READ)
+        if decoded_prefix != payload:
+            decoded_kind = detect_roblox_payload_kind(decoded_prefix, url=url)
+            return decoded_kind if decoded_kind != 'other' else 'compressed'
+        return 'compressed'
     lower_url = url.casefold()
     lower_path = lower_url.split('?', 1)[0]
     if lower_path.endswith('.m3u8'):
@@ -425,6 +485,8 @@ def detect_roblox_payload_kind(payload: bytes, *, url: str = '') -> str:
         return 'video-manifest'
     if re.search(rb'(?im)^\s*roblox-assettypeid\s*:\s*\d+\s*$', payload[:4096]):
         return 'asset-metadata'
+    if payload.startswith(b'CSGPHS'):
+        return 'csgphs'
     if payload.startswith((b'\x00\x01\x00\x00', b'OTTO', b'ttcf', b'wOFF', b'wOF2')):
         return 'font'
     if payload[:8] == b'<roblox!':
@@ -474,7 +536,7 @@ def detect_roblox_payload_kind(payload: bytes, *, url: str = '') -> str:
         if b'KeyframeSequence' in payload:
             return 'anim'
         return 'xml'
-    if payload[:1] in (b'{', b'['):
+    if _looks_like_json_prefix(payload):
         return 'json'
     return 'other'
 
