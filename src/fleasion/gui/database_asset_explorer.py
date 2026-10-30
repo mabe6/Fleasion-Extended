@@ -144,7 +144,7 @@ def _detect_kind(sample: bytes) -> tuple[str, str]:
     url, payload, has_header = split_rbxh_entry(sample)
     if not has_header:
         payload = sample
-    if payload.startswith((b'\\x1f\\x8b', b'\\x28\\xb5\\x2f\\xfd')):
+    if payload.startswith((b'\x1f\x8b', b'\x28\xb5\x2f\xfd')):
         return 'compressed', url
     kind = detect_roblox_payload_kind(payload)
     # Some XML assets contain animations but have no binary RBXM signature.
