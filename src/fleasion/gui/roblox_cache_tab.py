@@ -10,8 +10,8 @@ import time
 from dataclasses import replace
 from pathlib import Path
 
-from PyQt6.QtCore import QPoint, Qt, QThread, QTimer, pyqtSignal
-from PyQt6.QtGui import QImage, QPixmap
+from PyQt6.QtCore import QItemSelectionModel, QPoint, Qt, QThread, QTimer, pyqtSignal
+from PyQt6.QtGui import QImage, QKeySequence, QPixmap, QShortcut
 from PyQt6.QtWidgets import (
     QApplication,
     QAbstractItemView,
@@ -22,6 +22,7 @@ from PyQt6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QMenu,
     QMessageBox,
     QPlainTextEdit,
     QPushButton,
@@ -475,7 +476,7 @@ class RobloxCacheTab(QWidget):
         )
         self.table.horizontalHeader().moveSection(9, 1)
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
-        self.table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self.table.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.table.setAlternatingRowColors(True)
         self.table.setSortingEnabled(False)
@@ -487,6 +488,10 @@ class RobloxCacheTab(QWidget):
         self.table.itemDoubleClicked.connect(self._set_selected_as_target)
         self.table.itemSelectionChanged.connect(self._selection_changed)
         self.table.itemClicked.connect(self._cache_entry_clicked)
+        self.table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.table.customContextMenuRequested.connect(self._show_entry_context_menu)
+        self._copy_shortcut = QShortcut(QKeySequence.StandardKey.Copy, self.table)
+        self._copy_shortcut.activated.connect(self._copy_selected_table_rows)
 
         self.entries_splitter = QSplitter(Qt.Orientation.Horizontal)
         self.entries_splitter.setChildrenCollapsible(True)
@@ -679,6 +684,95 @@ class RobloxCacheTab(QWidget):
             return ''
         item = self.table.item(row, 0)
         return str(item.data(Qt.ItemDataRole.UserRole) or '') if item else ''
+
+    def _selected_table_rows(self) -> list[int]:
+        """Return selected full-row indexes in their current visual table order."""
+        return sorted(
+            index.row()
+            for index in self.table.selectionModel().selectedRows()
+        )
+
+    def _copy_selected_table_column(self, column: int) -> None:
+        """Copy one logical column for every selected row, as in upstream Fleasion."""
+        values = []
+        for row in self._selected_table_rows():
+            item = self.table.item(row, column)
+            if item is not None:
+                values.append(item.text())
+        if values:
+            QApplication.clipboard().setText('\n'.join(values))
+            log_buffer.log(
+                'ScraperDB',
+                f'Copied {len(values)} value(s) from column {column}.',
+            )
+
+    def _copy_selected_table_rows(self) -> None:
+        """Copy selected rows as TSV, respecting visible columns and header order."""
+        rows = self._selected_table_rows()
+        if not rows:
+            return
+
+        header = self.table.horizontalHeader()
+        columns = sorted(
+            (
+                column
+                for column in range(self.table.columnCount())
+                if not header.isSectionHidden(column)
+            ),
+            key=header.visualIndex,
+        )
+        lines = []
+        for row in rows:
+            values = []
+            for column in columns:
+                item = self.table.item(row, column)
+                value = item.text() if item is not None else ''
+                values.append(
+                    value.replace('\t', ' ').replace('\r', ' ').replace('\n', ' ')
+                )
+            lines.append('\t'.join(values))
+
+        if lines:
+            QApplication.clipboard().setText('\n'.join(lines))
+            log_buffer.log(
+                'ScraperDB',
+                f'Copied {len(rows)} selected row(s) to clipboard.',
+            )
+
+    def _show_entry_context_menu(self, position) -> None:
+        """Show copy actions for the selected cache rows."""
+        clicked_index = self.table.indexAt(position)
+        selected_rows = set(self._selected_table_rows())
+        if clicked_index.isValid() and clicked_index.row() not in selected_rows:
+            self.table.clearSelection()
+            self.table.selectRow(clicked_index.row())
+            selected_rows = set(self._selected_table_rows())
+        if not selected_rows:
+            return
+
+        menu = QMenu(self.table)
+        copy_menu = menu.addMenu('Copy')
+        copy_rows_action = copy_menu.addAction('Selected rows (TSV)')
+        copy_menu.addSeparator()
+        copy_id_action = copy_menu.addAction('Entry ID')
+        copy_asset_id_action = copy_menu.addAction('Asset ID')
+        copy_kind_action = copy_menu.addAction('Kind')
+        copy_name_action = copy_menu.addAction('Name')
+        copy_url_action = copy_menu.addAction('URL')
+
+        action = menu.exec(self.table.viewport().mapToGlobal(position))
+        if action == copy_rows_action:
+            self._copy_selected_table_rows()
+        elif action == copy_id_action:
+            self._copy_selected_table_column(0)
+        elif action == copy_asset_id_action:
+            self._copy_selected_table_column(1)
+        elif action == copy_kind_action:
+            self._copy_selected_table_column(2)
+        elif action == copy_name_action:
+            self._copy_selected_table_column(9)
+        elif action == copy_url_action:
+            self._copy_selected_table_column(8)
 
     def _set_selected_as_target(self) -> None:
         entry_id = self._selected_entry_id()
@@ -1010,21 +1104,32 @@ class RobloxCacheTab(QWidget):
 
     def _render_entries(self, *_args) -> None:
         selected_id = self._selected_entry_id()
+        selected_ids = [
+            str(index.data(Qt.ItemDataRole.UserRole) or '')
+            for index in self.table.selectionModel().selectedRows()
+            if index.data(Qt.ItemDataRole.UserRole)
+        ]
+        if selected_id and selected_id not in selected_ids:
+            selected_ids.append(selected_id)
         visible_entries = self._sort_entries(self._visible_entries())
         page_size = self._entry_page_size()
         page_count = (len(visible_entries) + page_size - 1) // page_size
 
+        selection_anchor_id = (
+            selected_id if selected_id in selected_ids
+            else (selected_ids[0] if selected_ids else '')
+        )
         if page_count:
             self._entries_page_offset = min(
                 self._entries_page_offset,
                 (page_count - 1) * page_size,
             )
-            if selected_id:
+            if selection_anchor_id:
                 selected_index = next(
                     (
                         index
                         for index, entry in enumerate(visible_entries)
-                        if entry.entry_id == selected_id
+                        if entry.entry_id == selection_anchor_id
                     ),
                     -1,
                 )
@@ -1056,6 +1161,7 @@ class RobloxCacheTab(QWidget):
         self.table.setUpdatesEnabled(False)
         self.table.setRowCount(0)
         selected_row = -1
+        row_by_entry_id = {}
         for entry in page_entries:
             row = self.table.rowCount()
             self.table.insertRow(row)
@@ -1082,15 +1188,30 @@ class RobloxCacheTab(QWidget):
                 if column == 0:
                     item.setData(Qt.ItemDataRole.UserRole, entry.entry_id)
                 self.table.setItem(row, column, item)
-            if entry.entry_id == selected_id:
-                selected_row = row
+            row_by_entry_id[entry.entry_id] = row
         self.table.setUpdatesEnabled(True)
+
+        selection_model = self.table.selectionModel()
+        selection_model.clearSelection()
+        retained_ids = [entry_id for entry_id in selected_ids if entry_id in row_by_entry_id]
+        for entry_id in retained_ids:
+            selection_model.select(
+                self.table.model().index(row_by_entry_id[entry_id], 0),
+                QItemSelectionModel.SelectionFlag.Select
+                | QItemSelectionModel.SelectionFlag.Rows,
+            )
+        primary_id = (
+            selected_id if selected_id in row_by_entry_id
+            else (retained_ids[0] if retained_ids else '')
+        )
+        selected_row = row_by_entry_id.get(primary_id, -1)
         if selected_row >= 0:
-            self.table.selectRow(selected_row)
-        else:
-            self.table.clearSelection()
+            selection_model.setCurrentIndex(
+                self.table.model().index(selected_row, 0),
+                QItemSelectionModel.SelectionFlag.NoUpdate,
+            )
         self.table.blockSignals(previous_signals_blocked)
-        if selected_id and selected_row < 0:
+        if (selected_id and selected_row < 0) or (primary_id and primary_id != selected_id):
             self._selection_changed()
         self.table.resizeColumnsToContents()
         self.table.setColumnWidth(0, 270)

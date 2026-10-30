@@ -7,8 +7,8 @@ from types import SimpleNamespace
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PyQt6.QtCore import Qt
-from PyQt6.QtWidgets import QApplication
+from PyQt6.QtCore import QItemSelectionModel, Qt
+from PyQt6.QtWidgets import QApplication, QAbstractItemView
 
 from fleasion.gui import roblox_cache_tab as cache_tab_module
 from fleasion.database.roblox_cache_store import RobloxCacheEntry
@@ -286,6 +286,92 @@ def test_scraper_db_kind_filter_uses_grouped_multiselect_category_popup():
         assert emitted[-1] == set()
     finally:
         popup.close()
+        app.processEvents()
+
+
+
+def test_scraper_db_extended_selection_and_copy_actions(monkeypatch, tmp_path):
+    app = _qapp()
+
+    class FakeStore:
+        def __init__(self, *_args, **_kwargs):
+            self.root = tmp_path
+
+        def _manifest(self):
+            return {}
+
+        def swap_status(self, _entry_id):
+            return ''
+
+    monkeypatch.setattr(cache_tab_module, "RobloxCacheStore", FakeStore)
+    widget = cache_tab_module.RobloxCacheTab(
+        config_manager=SimpleNamespace(settings={}),
+        view_mode='slots',
+    )
+    widget.resize(1200, 700)
+    widget.show()
+    app.processEvents()
+
+    entries = [
+        RobloxCacheEntry(
+            entry_id='a' * 32, file_size=100, database_size=110, modified_at=1,
+            kind='mesh', url='https://assets.invalid/a', asset_id='100',
+            has_rbxh_header=False, swap_status='', storage_mode='database', name='First Mesh',
+        ),
+        RobloxCacheEntry(
+            entry_id='b' * 32, file_size=200, database_size=210, modified_at=2,
+            kind='png', url='https://assets.invalid/b', asset_id='200',
+            has_rbxh_header=False, swap_status='', storage_mode='file', name='Second Image',
+        ),
+        RobloxCacheEntry(
+            entry_id='c' * 32, file_size=300, database_size=310, modified_at=3,
+            kind='rbxm', url='https://assets.invalid/c', asset_id='300',
+            has_rbxh_header=False, swap_status='', storage_mode='database', name='Third Model',
+        ),
+    ]
+    try:
+        assert (
+            widget.table.selectionMode()
+            == QAbstractItemView.SelectionMode.ExtendedSelection
+        )
+        assert (
+            widget.table.selectionBehavior()
+            == QAbstractItemView.SelectionBehavior.SelectRows
+        )
+
+        widget.entries = list(entries)
+        widget.entries_by_id = {entry.entry_id: entry for entry in entries}
+        widget._render_entries()
+
+        selection = widget.table.selectionModel()
+        widget.table.selectRow(0)
+        selection.select(
+            widget.table.model().index(1, 0),
+            QItemSelectionModel.SelectionFlag.Select
+            | QItemSelectionModel.SelectionFlag.Rows,
+        )
+        assert widget._selected_table_rows() == [0, 1]
+
+        widget._copy_selected_table_column(1)
+        assert QApplication.clipboard().text() == '100\n200'
+
+        widget._copy_selected_table_rows()
+        copied_rows = QApplication.clipboard().text().splitlines()
+        assert len(copied_rows) == 2
+        # Name is visually moved next to Entry ID in this table.
+        assert copied_rows[0].split('\t')[:3] == ['a' * 32, 'First Mesh', '100']
+        assert copied_rows[1].split('\t')[:3] == ['b' * 32, 'Second Image', '200']
+
+        # Sorting must preserve all selected entry IDs, not only the current row.
+        widget._on_table_header_clicked(3)
+        retained_ids = {
+            widget.table.item(row, 0).data(Qt.ItemDataRole.UserRole)
+            for row in widget._selected_table_rows()
+        }
+        assert retained_ids == {'a' * 32, 'b' * 32}
+        assert widget._selected_entry_id() in {'a' * 32, 'b' * 32}
+    finally:
+        widget.close()
         app.processEvents()
 
 
