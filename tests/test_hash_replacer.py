@@ -90,3 +90,27 @@ def test_import_asset_id_rejects_non_numeric_source(tmp_path: Path):
     store = HashReplacerStore(tmp_path / "HashReplacer")
     with pytest.raises(HashReplacerError, match="numeric Roblox Asset ID"):
         store.import_asset_id("https://www.roblox.com/library/123")
+
+
+
+def test_import_obj_converts_to_roblox_mesh_and_keeps_source_name(tmp_path: Path):
+    source = tmp_path / "fallen_wall.obj"
+    source.write_text(
+        "o triangle\n"
+        "v 0 0 0\n"
+        "v 1 0 0\n"
+        "v 0 1 0\n"
+        "f 1 2 3\n",
+        encoding="utf-8",
+    )
+    store = HashReplacerStore(tmp_path / "HashReplacer")
+
+    imported = store.import_paths([source])[0]
+    stored = store.asset_path(imported["sha256"])
+
+    assert imported["kind"] == "mesh"
+    assert imported["name"] == "fallen_wall.obj"
+    assert imported["converted_from"] == "obj"
+    assert stored.suffix == ".mesh"
+    assert stored.read_bytes().startswith(b"version 2.00\n")
+    assert source.read_text(encoding="utf-8").startswith("o triangle")
