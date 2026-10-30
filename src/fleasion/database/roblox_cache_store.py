@@ -11,6 +11,7 @@ import json
 import os
 import re
 import sqlite3
+import shutil
 import struct
 import time
 import zlib
@@ -92,6 +93,41 @@ def decompress_roblox_payload(
             f'Decompressed payload exceeds the {max_output_bytes:,}-byte limit.'
         )
     return decoded
+
+
+def decompress_roblox_payload_file(
+    source: str | os.PathLike[str],
+    destination: str | os.PathLike[str],
+    *,
+    chunk_size: int = 1024 * 1024,
+) -> int:
+    """Stream a cache payload into a temporary file and return its decoded size."""
+    if chunk_size <= 0:
+        raise ValueError('chunk_size must be positive')
+    source_path = Path(source)
+    destination_path = Path(destination)
+    try:
+        with source_path.open('rb') as reader, destination_path.open('wb') as writer:
+            magic = reader.read(4)
+            reader.seek(0)
+            if magic == _GZIP_MAGIC:
+                with gzip.GzipFile(fileobj=reader, mode='rb') as decoded:
+                    shutil.copyfileobj(decoded, writer, length=chunk_size)
+            elif magic == _ZSTD_MAGIC:
+                import zstandard
+
+                with zstandard.ZstdDecompressor().stream_reader(
+                    reader, read_size=chunk_size
+                ) as decoded:
+                    shutil.copyfileobj(decoded, writer, length=chunk_size)
+            else:
+                shutil.copyfileobj(reader, writer, length=chunk_size)
+        return destination_path.stat().st_size
+    except Exception as exc:
+        destination_path.unlink(missing_ok=True)
+        if isinstance(exc, RobloxCacheError):
+            raise
+        raise RobloxCacheError(f'Could not stream-decompress cache payload: {exc}') from exc
 
 
 def detect_roblox_cache_payload_kind(payload: bytes) -> str:
@@ -418,6 +454,96 @@ class RobloxCacheStore:
             if path.is_file():
                 return path.read_bytes(), mode
         raise RobloxCacheError(f'Entry {entry_id} has no content BLOB or physical cache file.')
+
+    def copy_entry_payload_to_file(
+        self,
+        entry_id: str,
+        destination: str | os.PathLike[str],
+        *,
+        chunk_size: int = 1024 * 1024,
+    ) -> tuple[str, int]:
+        """Copy an entry's raw payload to disk in chunks, stripping only its RBXH header."""
+        self._validate_entry_id(entry_id)
+        if chunk_size <= 0:
+            raise ValueError('chunk_size must be positive')
+        target = Path(destination)
+        browser = SQLiteBrowser(self.database_path)
+        try:
+            columns, _ddl, _kind = browser.schema('files')
+            names = {str(column['name']) for column in columns}
+            has_content = 'content' in names
+            with contextlib.closing(browser.connect_readonly()) as connection:
+                row = connection.execute(
+                    'SELECT content IS NOT NULL AS has_content, '
+                    'length(content) AS content_size FROM files WHERE id = ?'
+                    if has_content else
+                    'SELECT 0 AS has_content, NULL AS content_size FROM files WHERE id = ?',
+                    (bytes.fromhex(entry_id),),
+                ).fetchone()
+                if row is not None and bool(row['has_content']):
+                    content_size = int(row['content_size'] or 0)
+
+                    def blob_chunks():
+                        offset = 1
+                        while offset <= content_size:
+                            chunk = connection.execute(
+                                'SELECT substr(content, ?, ?) FROM files WHERE id = ?',
+                                (offset, chunk_size, bytes.fromhex(entry_id)),
+                            ).fetchone()
+                            data = chunk[0] if chunk else None
+                            if isinstance(data, memoryview):
+                                data = data.tobytes()
+                            if not isinstance(data, bytes) or not data:
+                                break
+                            yield data
+                            offset += len(data)
+
+                    chunks = iter(blob_chunks())
+                    try:
+                        first = next(chunks)
+                    except StopIteration:
+                        first = b''
+                    url, payload_offset = '', 0
+                    try:
+                        url, payload_offset = parse_rbxh_header(first)
+                    except RobloxCacheError:
+                        pass
+                    written = 0
+                    with target.open('wb') as output:
+                        payload = first[payload_offset:]
+                        output.write(payload)
+                        written += len(payload)
+                        for chunk in chunks:
+                            output.write(chunk)
+                            written += len(chunk)
+                    return url, written
+
+            physical_candidates = (
+                self._entry_path(entry_id),
+                self.library_dir / entry_id,
+            )
+            physical = next((path for path in physical_candidates if path.is_file()), None)
+            if physical is None:
+                raise RobloxCacheError(
+                    f'Entry {entry_id} has no content BLOB or physical cache file.'
+                )
+            with physical.open('rb') as source:
+                first = source.read(chunk_size)
+                url, payload_offset = '', 0
+                try:
+                    url, payload_offset = parse_rbxh_header(first)
+                except RobloxCacheError:
+                    pass
+                written = 0
+                with target.open('wb') as output:
+                    payload = first[payload_offset:]
+                    output.write(payload)
+                    written += len(payload)
+                    shutil.copyfileobj(source, output, length=chunk_size)
+                    written += source.tell() - len(first)
+            return url, written
+        except (SQLiteBrowserError, sqlite3.Error) as exc:
+            raise RobloxCacheError(f'Could not stream cache entry {entry_id}: {exc}') from exc
 
     def _entry_path(self, entry_id: str) -> Path:
         self._validate_entry_id(entry_id)
