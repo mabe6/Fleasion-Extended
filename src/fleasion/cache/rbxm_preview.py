@@ -538,8 +538,14 @@ class RbxmPreviewWidget(QWidget):
         if self.document is None:
             return
 
-        for root in self.document.roots:
-            self._add_instance_item(None, root)
+        self.tree.setUpdatesEnabled(False)
+        self.tree.blockSignals(True)
+        try:
+            for root in self.document.roots:
+                self._add_instance_item(None, root)
+        finally:
+            self.tree.blockSignals(False)
+            self.tree.setUpdatesEnabled(True)
 
         instance_count = len(self.document.instances)
         root_count = len(self.document.roots)
