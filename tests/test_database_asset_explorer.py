@@ -28,18 +28,28 @@ def test_asset_kind_recognizes_readable_animation_and_image_formats() -> None:
     assert url == ''
 
 
-def test_detect_kind_decompresses_truncated_gzip_prefix() -> None:
+def test_detect_kind_defers_truncated_gzip_prefix_until_preview() -> None:
     import gzip
     import hashlib
+
+    from fleasion.database.roblox_cache_store import (
+        decompress_roblox_payload,
+        detect_roblox_payload_kind,
+    )
 
     payload = b'version 1.00\n' + b''.join(
         hashlib.sha256(str(index).encode()).digest() for index in range(3000)
     )
     compressed = gzip.compress(payload)
     assert len(compressed) > 8192
+
+    # Database refresh classifies by the compression signature only.
     kind, url = _detect_kind(compressed[:8192])
-    assert kind == 'mesh'
+    assert kind == 'compressed'
     assert url == ''
+
+    # The actual format is identified only once the selected payload is decoded.
+    assert detect_roblox_payload_kind(decompress_roblox_payload(compressed)) == 'mesh'
 
 
 def test_embedded_roblox_xml_name_is_readable() -> None:
