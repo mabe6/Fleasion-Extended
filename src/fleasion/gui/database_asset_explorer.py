@@ -48,6 +48,7 @@ from ..database.roblox_cache_store import (
     RobloxCacheStore,
     decompress_roblox_payload_file,
     detect_roblox_payload_kind,
+    extract_cached_http_response_asset_payload,
     format_cached_http_response_preview,
     is_roblox_compressed_payload,
     parse_cached_http_response,
@@ -483,6 +484,11 @@ class _AssetPreviewWorker(QThread):
                 kind = detect_roblox_payload_kind(prefix, url=source_url)
                 # Animation names may appear after the RBXM/XML signature.
                 payload = decoded_path.read_bytes()
+                response_asset = extract_cached_http_response_asset_payload(
+                    payload, url=source_url
+                )
+                if response_asset is not None:
+                    payload, kind, _response_headers = response_asset
                 if kind == 'xml' and b'CurveAnimation' in payload:
                     kind = 'curve-anim'
                 elif kind == 'xml' and b'KeyframeSequence' in payload:
@@ -1514,6 +1520,7 @@ class DatabaseAssetExplorer(QWidget):
                         if name_cell is not None:
                             name_cell.setText(root_name)
 
+                self._model_preview_tabs.show()
                 self._model_preview_tabs.setCurrentIndex(0)
                 self.preview_stack.setCurrentWidget(self._model_preview_tabs)
             elif item.kind == 'mesh':
