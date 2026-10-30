@@ -163,7 +163,7 @@ def test_download_refuses_untrusted_signed_location(tmp_path: Path) -> None:
 def test_cache_header_parser_treats_asset_type_as_metadata_not_asset_id() -> None:
     from fleasion.utils.asset_lookup import _cache_header_metadata
 
-    metadata = _cache_header_metadata(b'roblox-assettypeid: 1\r\n)
+    metadata = _cache_header_metadata(b'roblox-assettypeid: 1\r\n')
 
     assert metadata['asset_type_id'] == '1'
     assert metadata['asset_type_label'] == 'Image (ID 1)'
@@ -194,4 +194,4 @@ def test_cache_cdn_probe_reads_asset_response_headers_without_body() -> None:
     assert metadata['asset_id'] == '987654'
     assert metadata['asset_version'] == '12'
     assert metadata['asset_type_label'] == 'Image (ID 1)'
-    assert metadata['uncompressed_size'] == '4096'\n
+    assert metadata['uncompressed_size'] == '4096'

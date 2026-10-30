@@ -160,7 +160,7 @@ def test_blob_cache_import_wraps_payload_and_updates_db_content(tmp_path, monkey
 
 
 def test_asset_type_metadata_payload_is_not_classified_as_mesh() -> None:
-    assert store_module.detect_roblox_payload_kind(b'roblox-assettypeid: 1\\r\\n') == 'asset-metadata'
+    assert store_module.detect_roblox_payload_kind(b'roblox-assettypeid: 1\r\n') == 'asset-metadata'
 
 
 def test_scan_joins_physical_entries_with_sqlite_metadata(tmp_path, monkeypatch):
