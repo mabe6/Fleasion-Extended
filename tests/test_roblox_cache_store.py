@@ -644,3 +644,23 @@ def test_roblox_asset_header_without_blank_separator_still_previews_image():
     extracted = store_module.extract_cached_http_response_asset_payload(response)
     assert extracted is not None
     assert extracted[0] == image
+
+
+def test_payload_kind_recognizes_generic_xml_and_both_roblox_animation_containers():
+    generic_xml = b'<?xml version="1.0"?><document><item id="1">value</item></document>'
+    keyframe_xml = (
+        b'<?xml version="1.0"?><roblox><Item class="KeyframeSequence"/>'
+        b'</roblox>'
+    )
+    curve_xml = b'<roblox><Item class="CurveAnimation"/></roblox>'
+    binary_animation = b'<roblox!\\x89\\xff\\x0d\\x0a\\x1a\\x0a' + b'KeyframeSequence'
+
+    assert detect_roblox_payload_kind(generic_xml) == "xml"
+    assert detect_roblox_payload_kind(keyframe_xml) == "anim"
+    assert detect_roblox_payload_kind(curve_xml) == "curve-anim"
+    assert detect_roblox_payload_kind(binary_animation) == "anim"
+
+
+def test_small_unrecognized_payloads_stay_other_instead_of_guessing_a_type():
+    assert detect_roblox_payload_kind(b"hello world test payload") == "other"
+    assert detect_roblox_payload_kind(b"\\x0d\\x00\\x00\\x00\\x00\\x00\\x00\\x00") == "other"
