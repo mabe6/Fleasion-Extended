@@ -56,14 +56,14 @@ class HashReplacerTab(QWidget):
         root.setSpacing(8)
 
         description = QLabel(
-            "Local cache mode: map a 32-character Roblox cache hash to an imported asset. "
+            "Local Asset Hash mode: map a 32-character Roblox cache hash to an imported asset. "
             "It works without the HTTP proxy and keeps the legacy Asset-ID profiles separate."
         )
         description.setWordWrap(True)
         root.addWidget(description)
 
         profile_row = QHBoxLayout()
-        profile_row.addWidget(QLabel("Hash profile:"))
+        profile_row.addWidget(QLabel("Asset Hash profile:"))
         self.profile_combo = QComboBox()
         self.profile_combo.currentTextChanged.connect(self.refresh_rules)
         profile_row.addWidget(self.profile_combo, 1)
@@ -80,7 +80,7 @@ class HashReplacerTab(QWidget):
         root.addLayout(profile_row)
 
         rule_row = QHBoxLayout()
-        rule_row.addWidget(QLabel("Target cache hash:"))
+        rule_row.addWidget(QLabel("Target Asset Hash:"))
         self.target_hash_edit = QLineEdit()
         self.target_hash_edit.setPlaceholderText("32-char cache hash")
         rule_row.addWidget(self.target_hash_edit, 2)
@@ -107,7 +107,7 @@ class HashReplacerTab(QWidget):
 
         self.rules_table = QTableWidget(0, 4)
         self.rules_table.setHorizontalHeaderLabels(
-            ["Target cache hash", "Imported file", "Type", "Size"]
+            ["Target Asset Hash", "Imported file", "Type", "Size"]
         )
         self.rules_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self.rules_table.setSelectionMode(QTableWidget.SelectionMode.SingleSelection)
@@ -153,7 +153,7 @@ class HashReplacerTab(QWidget):
             return
         self.target_hash_edit.setText(value)
         self.status_label.setText(
-            f"Target set to cache hash {value}. Choose an imported file or download an Asset ID."
+            f"Target Asset Hash set to {value}. Choose an imported file or download an Asset ID."
         )
 
     def refresh_profiles(self, selected: str | None = None) -> None:
@@ -288,7 +288,7 @@ class HashReplacerTab(QWidget):
             self.asset_combo.setCurrentIndex(index)
         self.status_label.setText(
             f"Imported Roblox Asset {asset_id} as local SHA-256 {asset['sha256']}."
-            " Enter a target cache hash and add the rule."
+            " Enter a target Asset Hash and add the rule."
         )
 
     def _add_rule(self) -> None:
@@ -303,7 +303,7 @@ class HashReplacerTab(QWidget):
             QMessageBox.warning(self, "Hash replacement rule", str(exc))
             return
         self.refresh_rules()
-        self.status_label.setText(f"Saved rule: {target_hash} → {source_hash[:16]}…")
+        self.status_label.setText(f"Saved Asset Hash rule: {target_hash} → {source_hash[:16]}…")
 
     def _selected_rule(self) -> tuple[str, str] | None:
         row = self.rules_table.currentRow()
@@ -332,7 +332,7 @@ class HashReplacerTab(QWidget):
             QMessageBox.warning(self, "Hash replacement rule", str(exc))
             return
         self.refresh_rules()
-        self.status_label.setText(f"Removed rule for cache hash {selected[0]}.")
+        self.status_label.setText(f"Removed Asset Hash rule for {selected[0]}.")
 
     def _apply_selected(self) -> None:
         selected = self._selected_rule()
