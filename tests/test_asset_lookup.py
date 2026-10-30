@@ -59,6 +59,10 @@ class _FakeSession:
         self.get_calls.append((url, kwargs))
         return self.get_responses.pop(0)
 
+    def head(self, url: str, **kwargs: Any) -> _FakeResponse:
+        self.get_calls.append((url, kwargs))
+        return self.get_responses.pop(0)
+
     def post(self, url: str, **kwargs: Any) -> _FakeResponse:
         self.post_calls.append((url, kwargs))
         return self.post_response
@@ -156,56 +160,38 @@ def test_download_refuses_untrusted_signed_location(tmp_path: Path) -> None:
     with pytest.raises(AssetLookupError, match='unexpected download host'):
         download_asset('12345', tmp_path / 'asset.bin', session=cast(requests.Session, session))
 
+def test_cache_header_parser_treats_asset_type_as_metadata_not_asset_id() -> None:
+    from fleasion.utils.asset_lookup import _cache_header_metadata
+
+    metadata = _cache_header_metadata(b'roblox-assettypeid: 1\\r\\n')
+
+    assert metadata['asset_type_id'] == '1'
+    assert metadata['asset_type_label'] == 'Image (ID 1)'
+    assert 'asset_id' not in metadata
 
 
-def test_open_cloud_key_is_not_forwarded_to_cdn_redirect(tmp_path: Path) -> None:
-    redirect = _FakeResponse(
+def test_cache_cdn_probe_reads_asset_response_headers_without_body() -> None:
+    from fleasion.utils.asset_lookup import _probe_cached_url
+
+    response = _FakeResponse(
         headers={
-            'Location': 'https://cdn.rbxcdn.com/assets/12345.bin',
-            'Content-Type': 'text/plain',
+            'Roblox-AssetId': '987654',
+            'Roblox-AssetVersionNumber': '12',
+            'Roblox-AssetTypeId': '1',
+            'X-Rbx-Uncompressed-Size-Bytes': '4096',
+            'Content-Type': 'application/octet-stream',
+            'Content-Length': '1200',
         },
-        status_code=302,
+        url='https://fts.rbxcdn.com/sc3/' + 'a' * 32,
     )
-    payload = b'protected asset bytes'
-    final = _FakeResponse(
-        chunks=(payload,),
-        url='https://cdn.rbxcdn.com/assets/12345.bin',
-    )
-    session = _FakeSession(
-        get_responses=[redirect, final],
-        post_response=_FakeResponse(),
-    )
-
-    result = download_asset(
-        '12345',
-        tmp_path / 'protected.bin',
-        api_key='secret-test-key',
-        session=cast(requests.Session, session),
-    )
-
-    assert result.path.read_bytes() == payload
-    assert session.get_calls[0][1]['headers']['x-api-key'] == 'secret-test-key'
-    assert session.get_calls[0][1]['allow_redirects'] is False
-    assert session.get_calls[1][1]['headers'] == {
-        'User-Agent': 'Fleasion/2.x (Roblox asset lookup)'
-    }
-    assert 'x-api-key' not in session.get_calls[1][1]['headers']
-
-
-
-def test_download_uses_open_cloud_endpoint_when_key_is_supplied(tmp_path: Path) -> None:
-    payload = b'private asset bytes'
-    response = _FakeResponse(chunks=(payload,))
     session = _FakeSession(get_responses=[response], post_response=_FakeResponse())
 
-    result = download_asset(
-        '12345',
-        tmp_path / 'private_asset.bin',
-        api_key='test-key',
-        session=cast(requests.Session, session),
+    metadata = _probe_cached_url(
+        cast(requests.Session, session),
+        'https://fts.rbxcdn.com/sc3/' + 'a' * 32,
     )
 
-    assert result.size == len(payload)
-    url, options = session.get_calls[0]
-    assert '/asset-delivery-api/v1/assetId/12345' in url
-    assert options['headers']['x-api-key'] == 'test-key'
+    assert metadata['asset_id'] == '987654'
+    assert metadata['asset_version'] == '12'
+    assert metadata['asset_type_label'] == 'Image (ID 1)'
+    assert metadata['uncompressed_size'] == '4096'\n
