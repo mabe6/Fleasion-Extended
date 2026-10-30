@@ -433,7 +433,7 @@ def format_asset_metadata_preview(
 
     lines.extend([
         "",
-        "This cache entry is a metadata/response record, not the asset's geometry or image data.",
+        "This cache entry contains metadata only (response headers/status), not the asset's geometry or image data.",
         "For a model or mesh preview, open the matching RBXM, XML or Mesh cache slot.",
     ])
     if not numeric_id:
