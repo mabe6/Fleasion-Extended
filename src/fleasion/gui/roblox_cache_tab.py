@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import re
 import sqlite3
+import tempfile
 import time
 from pathlib import Path
 
@@ -42,6 +43,7 @@ from ..database.roblox_cache_store import (
     detect_roblox_cache_payload_kind,
     detect_roblox_payload_kind,
     decompress_roblox_payload,
+    decompress_roblox_payload_file,
     split_rbxh_entry,
 )
 from ..utils import log_buffer
@@ -103,16 +105,22 @@ class _CacheEntryPreviewWorker(QThread):
         try:
             if self.isInterruptionRequested():
                 return
-            data, _storage_mode = self.store._get_entry_data(self.entry_id)
-            _url, payload, _has_header = split_rbxh_entry(data)
-            del data
-            if self.isInterruptionRequested():
-                return
-            payload = decompress_roblox_payload(payload)
-            if self.isInterruptionRequested():
-                return
-            kind = detect_roblox_payload_kind(payload)
-            self.payload_ready.emit(self.entry_id, payload, kind)
+            with tempfile.TemporaryDirectory(prefix='fleasion-cache-preview-') as folder:
+                raw_path = Path(folder) / 'payload.raw'
+                decoded_path = Path(folder) / 'payload.decoded'
+                self.store.copy_entry_payload_to_file(self.entry_id, raw_path)
+                if self.isInterruptionRequested():
+                    return
+                decompress_roblox_payload_file(raw_path, decoded_path)
+                if self.isInterruptionRequested():
+                    return
+                with decoded_path.open('rb') as handle:
+                    prefix = handle.read(8192)
+                kind = detect_roblox_payload_kind(prefix)
+                payload = decoded_path.read_bytes()
+                if self.isInterruptionRequested():
+                    return
+                self.payload_ready.emit(self.entry_id, payload, kind)
         except Exception as exc:
             if not self.isInterruptionRequested():
                 self.preview_failed.emit(
