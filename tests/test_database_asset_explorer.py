@@ -301,6 +301,7 @@ xml = b'''<roblox version="4">
 widget = RbxmPreviewWidget()
 widget.load_bytes(xml, 'test')
 assert widget.animation_names() == ['Animations', 'Wave', 'Movement', 'Run']
+assert widget.animation_paths() == ['Animations / Wave', 'Animations / Movement / Run']
 widget.close()
 app.processEvents()
 """
@@ -343,3 +344,78 @@ def test_asset_database_mesh_preview_creates_obj_viewer(monkeypatch) -> None:
     finally:
         widget.close()
         app.processEvents()
+
+
+def test_rbxm_preview_selects_first_instance_with_real_properties() -> None:
+    code = r"""
+from PyQt6.QtWidgets import QApplication
+from fleasion.cache.rbxm_preview import RbxmPreviewWidget
+
+app = QApplication([])
+xml = b'''<roblox version="4">
+  <Item class="Folder" referent="RBX0">
+    <Item class="KeyframeSequence" referent="RBX1">
+      <Properties><string name="Name">Mood</string></Properties>
+    </Item>
+  </Item>
+</roblox>'''
+widget = RbxmPreviewWidget()
+widget.load_bytes(xml, 'nested-animation')
+selected = widget._item_to_instance[id(widget.tree.currentItem())]
+assert selected.class_name == 'KeyframeSequence'
+assert widget.properties_table.rowCount() >= 3
+widget.close()
+app.processEvents()
+"""
+    env = os.environ.copy()
+    env['QT_QPA_PLATFORM'] = 'offscreen'
+    subprocess.run([sys.executable, '-c', code], check=True, env=env)
+
+
+def test_asset_database_stop_preview_hides_full_preview_pane() -> None:
+    code = r"""
+from types import SimpleNamespace
+from PyQt6.QtWidgets import QApplication
+from fleasion.gui.database_asset_explorer import DatabaseAssetExplorer
+
+app = QApplication([])
+widget = DatabaseAssetExplorer()
+assert not widget.preview_panel.isHidden()
+widget._stop_preview()
+assert widget.preview_panel.isHidden()
+item = SimpleNamespace(entry_id='a' * 32)
+widget._load_preview(item)
+assert not widget.preview_panel.isHidden()
+widget.close()
+app.processEvents()
+"""
+    env = os.environ.copy()
+    env['QT_QPA_PLATFORM'] = 'offscreen'
+    subprocess.run([sys.executable, '-c', code], check=True, env=env)
+
+
+def test_asset_type_filter_popup_is_searchable_and_scrollable() -> None:
+    code = r"""
+from PyQt6.QtWidgets import QApplication
+from fleasion.gui.database_asset_explorer import _CheckListPopup
+
+app = QApplication([])
+options = [(f'type-{index}', f'Type {index}') for index in range(35)]
+options.extend([('png', 'PNG image'), ('anim', 'Animation')])
+popup = _CheckListPopup(options, {key for key, _label in options})
+assert popup.scroll_area.height() == 250
+assert not popup.all_button.isHidden()
+assert not popup.clear_button.isHidden()
+popup.filter_edit.setText('png')
+assert not popup.checkboxes['png'].isHidden()
+assert popup.checkboxes['anim'].isHidden()
+popup._clear()
+assert not popup.active
+popup._select_all()
+assert popup.active == {key for key, _label in options}
+popup.close()
+app.processEvents()
+"""
+    env = os.environ.copy()
+    env['QT_QPA_PLATFORM'] = 'offscreen'
+    subprocess.run([sys.executable, '-c', code], check=True, env=env)
