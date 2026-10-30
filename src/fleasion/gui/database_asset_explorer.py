@@ -42,6 +42,7 @@ from PyQt6.QtWidgets import (
 )
 
 from ..database.roblox_cache_store import (
+    RobloxCacheError,
     RobloxCacheStore,
     decompress_roblox_payload_file,
     detect_roblox_payload_kind,
@@ -1560,13 +1561,11 @@ class DatabaseAssetExplorer(QWidget):
         if not target:
             return
         try:
-            # Export stays independent from preview decoding and preserves the exact
-            # stored (possibly compressed) payload.
-            data = self._read_entry_bytes(item.entry_id)
-            _url, raw_payload, _has_header = split_rbxh_entry(data)
-            Path(target).write_bytes(raw_payload)
+            # Stream the original payload to disk without loading the full BLOB into RAM.
+            store = RobloxCacheStore(self.database_path.parent)
+            store.copy_entry_payload_to_file(item.entry_id, target)
             self.status_label.setText(f'Exported raw payload to {target}')
-        except (OSError, SQLiteBrowserError) as exc:
+        except (OSError, SQLiteBrowserError, RobloxCacheError) as exc:
             QMessageBox.warning(self, 'Export failed', str(exc))
 
     def _resolve_visible_names(self, visible_items: list[_AssetItem]) -> None:
