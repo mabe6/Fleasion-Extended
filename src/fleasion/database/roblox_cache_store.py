@@ -225,7 +225,9 @@ def split_rbxh_entry(data: bytes) -> tuple[str, bytes, bool]:
 
 def detect_roblox_payload_kind(payload: bytes) -> str:
     """Detect common Roblox cache payload formats without decoding their contents."""
-    if re.search(rb'(?im)^\s*roblox-assettypeid\s*:\s*\d+\s*    if payload.startswith((b'\x00\x01\x00\x00', b'OTTO', b'ttcf', b'wOFF', b'wOF2')):
+    if re.search(rb'(?im)^\s*roblox-assettypeid\s*:\s*\d+\s*$', payload[:4096]):
+        return 'asset-metadata'
+    if payload.startswith((b'\x00\x01\x00\x00', b'OTTO', b'ttcf', b'wOFF', b'wOF2')):
         return 'font'
     if payload[:8] == b'<roblox!':
         if b'KeyframeSequence' in payload:
