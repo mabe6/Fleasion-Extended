@@ -125,3 +125,56 @@ def test_malformed_animation_marker_does_not_look_like_a_clean_import():
     assert report.root_class == "Unparsed animation"
     assert report.requires_override
     assert any("could not parse" in finding for finding in report.findings)
+
+
+
+def _binary_rbxm_from_xml(payload: bytes) -> bytes:
+    from fleasion.cache.roblox_document import _xml_to_document
+    from fleasion.cache.tools.solidmodel_converter.rbxm.serializer import write_rbxm
+
+    return write_rbxm(_xml_to_document(payload))
+
+
+def test_binary_curve_animation_is_classified_and_playable():
+    from fleasion.cache.animation_viewer import load_animation_data
+
+    binary = _binary_rbxm_from_xml(_curve_animation_xml())
+
+    assert detect_roblox_payload_kind(binary) == "curve-anim"
+    keyframes = load_animation_data(binary)
+    assert len(keyframes) >= 2
+    assert keyframes[-1].time == 1.0
+    assert "LowerTorso" in keyframes[-1].pose_by_part_name
+
+
+def test_binary_keyframe_sequence_is_classified_as_animation_and_parsed():
+    from fleasion.cache.animation_viewer import load_animation_data
+
+    xml = b'''<?xml version="1.0"?>
+<roblox version="4">
+  <Item class="KeyframeSequence" referent="sequence">
+    <Properties><string name="Name">Binary animation test</string></Properties>
+    <Item class="Keyframe" referent="key">
+      <Properties><float name="Time">0</float></Properties>
+      <Item class="Pose" referent="pose">
+        <Properties>
+          <string name="Name">Torso</string>
+          <float name="Weight">1</float>
+          <CoordinateFrame name="CFrame">
+            <X>0</X><Y>0</Y><Z>0</Z>
+            <R00>1</R00><R01>0</R01><R02>0</R02>
+            <R10>0</R10><R11>1</R11><R12>0</R12>
+            <R20>0</R20><R21>0</R21><R22>1</R22>
+          </CoordinateFrame>
+        </Properties>
+      </Item>
+    </Item>
+  </Item>
+</roblox>
+'''
+    binary = _binary_rbxm_from_xml(xml)
+
+    assert detect_roblox_payload_kind(binary) == "anim"
+    keyframes = load_animation_data(binary)
+    assert len(keyframes) == 1
+    assert "Torso" in keyframes[0].pose_by_part_name
