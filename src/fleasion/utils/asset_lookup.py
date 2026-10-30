@@ -26,7 +26,8 @@ _CACHE_HEADER_RE = re.compile(
     rb'(?im)^\s*(?:roblox-)?(assetid|assetversionnumber|assettypeid|asset-recordable|assetname|creatorid)\s*:\s*([^\r\n]+)'
 )
 _HTTP_METADATA_HEADER_RE = re.compile(
-    rb'(?im)^\s*([a-z][a-z0-9-]{0,79})\s*:\s*([^\r\n]{1,512})\s*
+    rb'(?im)^\s*([a-z][a-z0-9-]{0,79})\s*:\s*([^\r\n]{1,512})\s*$'
+)
 _ASSET_TYPE_NAMES = {
     1: 'Image',
     2: 'TShirt',
