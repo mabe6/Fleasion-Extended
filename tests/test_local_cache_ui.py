@@ -555,21 +555,45 @@ def test_cache_slots_plays_ogg_payload_instead_of_hex_dump(monkeypatch, tmp_path
         app.processEvents()
 
 
-def test_cache_asset_type_filter_popup_is_searchable_multi_select_and_scrollable():
+def test_cache_asset_type_filter_popup_uses_grouped_multiselect_categories():
     app = _qapp()
-    options = list(cache_tab_module._KIND_FILTER_OPTIONS)
-    popup = cache_tab_module._KindFilterPopup(options, {kind for kind, _label in options})
+    from fleasion.cache.asset_type_filter import CategoryFilterPopup
+
+    options = dict(cache_tab_module._KIND_FILTER_OPTIONS)
+    popup = CategoryFilterPopup(
+        parent=None,
+        active_filters=set(options),
+        categories={
+            name: list(kinds)
+            for name, kinds in cache_tab_module._KIND_FILTER_CATEGORIES.items()
+        },
+        type_labels=options,
+        category_labels=cache_tab_module._KIND_FILTER_CATEGORY_LABELS,
+    )
     try:
-        assert popup.scroll_area.height() == 265
-        assert not popup.all_button.isHidden()
-        assert not popup.clear_button.isHidden()
-        popup.filter_edit.setText('collision')
-        assert not popup.checkboxes['csgphs'].isHidden()
-        assert popup.checkboxes['png'].isHidden()
-        popup._clear()
-        assert popup.active == set()
-        popup._select_all()
-        assert popup.active == {kind for kind, _label in options}
+        assert popup.scroll_area.height() > 0
+        assert len(popup.category_checkboxes) == 5
+        assert set(popup.checkboxes) == set(options)
+        assert popup.checkboxes['csgphs'].isChecked()
+        assert popup.checkboxes['png'].isChecked()
+
+        # Individual asset kinds can be toggled independently.
+        popup.checkboxes['csgphs'].click()
+        assert 'csgphs' not in popup.active_filters
+        assert 'png' in popup.active_filters
+
+        # Category checkboxes select or clear all kinds in that group.
+        popup.category_checkboxes['models_3d'].click()
+        assert set(cache_tab_module._KIND_FILTER_CATEGORIES['models_3d']).issubset(
+            popup.active_filters
+        )
+
+        popup._clear_all()
+        assert popup.active_filters == set()
+        popup.category_checkboxes['images_textures'].click()
+        assert set(cache_tab_module._KIND_FILTER_CATEGORIES['images_textures']).issubset(
+            popup.active_filters
+        )
     finally:
         popup.close()
         app.processEvents()
