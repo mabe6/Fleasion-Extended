@@ -298,7 +298,9 @@ def test_metadata_preview_uses_encoding_from_cdn_url_when_header_is_absent() -> 
         source_url='https://fts.rbxcdn.com/v2/sc2/' + 'a' * 32 + '?encoding=zstd&version=1',
     )
 
-    assert 'Compression: Zstandard (Zstd)' in preview
+    assert 'CDN URL encoding parameter: zstd' in preview
+    assert 'not proof that the stored bytes are compressed' in preview
+    assert 'Compression: Zstandard (Zstd)' not in preview
 
 
 def test_asset_type_labels_cover_extended_animation_and_accessory_types() -> None:
