@@ -12,6 +12,7 @@ import requests
 from fleasion.utils.asset_lookup import (
     AssetLookupError,
     download_asset,
+    format_asset_metadata_preview,
     lookup_asset_metadata,
     normalize_asset_id,
 )
