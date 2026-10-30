@@ -75,7 +75,9 @@ def decompress_roblox_payload_prefix(
             import zstandard
 
             frame = io.BytesIO(payload[zstd_offset:])
-            with zstandard.ZstdDecompressor().stream_reader(frame) as reader:
+            with zstandard.ZstdDecompressor().stream_reader(
+                frame, read_across_frames=True
+            ) as reader:
                 return reader.read(max_output_bytes)
         except Exception:
             # Cache scans should remain usable when a frame is truncated or malformed,
@@ -105,7 +107,9 @@ def decompress_roblox_payload(
             import zstandard
 
             frame = io.BytesIO(payload[zstd_offset or 0:])
-            with zstandard.ZstdDecompressor().stream_reader(frame) as reader:
+            with zstandard.ZstdDecompressor().stream_reader(
+                frame, read_across_frames=True
+            ) as reader:
                 decoded = reader.read() if max_output_bytes is None else reader.read(max_output_bytes + 1)
     except Exception as exc:
         raise RobloxCacheError(f'Could not decompress {encoding} payload: {exc}') from exc
@@ -141,7 +145,7 @@ def decompress_roblox_payload_file(
 
                 reader.seek(zstd_offset)
                 with zstandard.ZstdDecompressor().stream_reader(
-                    reader, read_size=chunk_size
+                    reader, read_size=chunk_size, read_across_frames=True
                 ) as decoded:
                     shutil.copyfileobj(decoded, writer, length=chunk_size)
             else:
