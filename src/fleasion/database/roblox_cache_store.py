@@ -217,6 +217,36 @@ def roblox_asset_type_name(value: str | int) -> str:
     return _ROBLOX_ASSET_TYPE_NAMES.get(key, f'Unknown asset type {key}')
 
 
+def extract_cached_http_response_asset_payload(
+    payload: bytes, *, url: str = ''
+) -> tuple[bytes, str, dict[str, str]] | None:
+    """Return a recognised response body for normal asset preview, when safely decodable.
+
+    Roblox DCZ responses using a dictionary are intentionally left wrapped because
+    decoding them without the matching dictionary would produce misleading output.
+    """
+    parsed = parse_cached_http_response(payload)
+    if parsed is None:
+        return None
+    headers, body = parsed
+    if not body:
+        return None
+
+    encoding = headers.get('content-encoding', '').casefold()
+    if 'dcz' in encoding or headers.get('x-rbx-zstd-dict-sha'):
+        return None
+    if 'gzip' in encoding or 'zstd' in encoding:
+        try:
+            body = decompress_roblox_payload(body)
+        except RobloxCacheError:
+            return None
+
+    kind = detect_roblox_payload_kind(body, url=url)
+    if kind in {'other', 'asset-metadata', 'http-response', 'roblox-settings'}:
+        return None
+    return body, kind, headers
+
+
 def format_cached_http_response_preview(payload: bytes, url: str = '') -> str:
     """Render safe response metadata without treating HTTP headers as asset bytes."""
     parsed = parse_cached_http_response(payload)
