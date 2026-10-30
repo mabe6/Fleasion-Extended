@@ -531,7 +531,7 @@ class RobloxCacheTab(QWidget):
 
         self.slot_status_filter = QComboBox()
         for label, value in (
-            ('All slots', 'all'),
+            ('All entries', 'all'),
             ('Unmodified', 'unmodified'),
             ('Active swaps', 'swapped'),
             ('Changed since swap', 'changed'),
@@ -574,17 +574,17 @@ class RobloxCacheTab(QWidget):
         preview_layout.setSpacing(5)
 
         preview_title_row = QHBoxLayout()
-        self.preview_title = QLabel('Cache Slot Preview')
+        self.preview_title = QLabel('Asset Preview')
         self.preview_title.setStyleSheet('font-weight: 600;')
         preview_title_row.addWidget(self.preview_title, 1)
         self.stop_preview_button = QPushButton('Stop preview')
-        self.stop_preview_button.setToolTip('Stop decoding the selected cache slot')
+        self.stop_preview_button.setToolTip('Stop decoding the selected asset')
         self.stop_preview_button.setVisible(False)
         self.stop_preview_button.clicked.connect(self._stop_preview)
         preview_title_row.addWidget(self.stop_preview_button)
         preview_layout.addLayout(preview_title_row)
 
-        self.preview_details = QLabel('Select a cache slot to preview its contents.')
+        self.preview_details = QLabel('Select an asset to preview its contents.')
         self.preview_details.setWordWrap(True)
         self.preview_details.setTextInteractionFlags(
             Qt.TextInteractionFlag.TextSelectableByMouse
@@ -760,27 +760,31 @@ class RobloxCacheTab(QWidget):
         if entry_id:
             self.source_edit.setText(entry_id)
 
+    def _entry_metadata(self, entry: RobloxCacheEntry) -> dict:
+        """Merge entry-specific cache metadata with public asset-name metadata."""
+        slot_metadata = self._cache_metadata.get(entry.entry_id, {})
+        result = dict(slot_metadata) if isinstance(slot_metadata, dict) else {}
+        settings = getattr(self.config_manager, 'settings', {})
+        cached_names = settings.get('local_db_asset_names', {}) if isinstance(settings, dict) else {}
+        asset_id = entry.asset_id or str(result.get('asset_id') or '')
+        if isinstance(cached_names, dict) and asset_id:
+            metadata = cached_names.get(asset_id, {})
+            if isinstance(metadata, dict):
+                result = {**metadata, **result}
+        return result
+
     def _entry_name(self, entry: RobloxCacheEntry) -> str:
         if entry.name:
             return entry.name
-        slot_metadata = self._cache_metadata.get(entry.entry_id, {})
-        if slot_metadata.get('name'):
-            return str(slot_metadata['name'])
-        settings = getattr(self.config_manager, 'settings', {})
-        cached_names = settings.get('local_db_asset_names', {}) if isinstance(settings, dict) else {}
-        asset_id = entry.asset_id or str(slot_metadata.get('asset_id') or '')
-        if isinstance(cached_names, dict) and asset_id:
-            metadata = cached_names.get(asset_id, {})
-            if isinstance(metadata, dict) and metadata.get('name'):
-                return str(metadata['name'])
-        return ''
+        metadata = self._entry_metadata(entry)
+        return str(metadata.get('name') or '')
 
     def _visible_entries(self) -> list[RobloxCacheEntry]:
         raw_query = self.search_edit.text().strip()
         query = raw_query.casefold()
         structured: list[tuple[str, str]] = []
         token_re = re.compile(r'(?P<key>[A-Za-z]+):(?P<value>"[^"]+"|\S+)')
-        supported_keys = {'name', 'type', 'size', 'dbsize', 'id', 'asset', 'url', 'status', 'storage'}
+        supported_keys = {'name', 'creator', 'type', 'size', 'dbsize', 'id', 'asset', 'url', 'status', 'storage'}
         for match in token_re.finditer(raw_query):
             key = match.group('key').casefold()
             if key not in supported_keys:
@@ -800,10 +804,12 @@ class RobloxCacheTab(QWidget):
         visible: list[RobloxCacheEntry] = []
         for entry in self.entries:
             entry_name = self._entry_name(entry)
+            entry_metadata = self._entry_metadata(entry)
             if query and not any(
                 query in str(value).casefold()
                 for value in (
                     entry_name,
+                    entry_metadata.get('creator_name', ''),
                     entry.entry_id,
                     entry.asset_id or self._cache_metadata.get(entry.entry_id, {}).get('asset_id', ''),
                     entry.kind,
@@ -821,6 +827,8 @@ class RobloxCacheTab(QWidget):
                 value = expected.casefold()
                 if key == 'name':
                     matches = value in entry_name.casefold()
+                elif key == 'creator':
+                    matches = value in str(entry_metadata.get('creator_name') or '').casefold()
                 elif key == 'type':
                     aliases = {
                         'images': image_kinds,
@@ -942,8 +950,11 @@ class RobloxCacheTab(QWidget):
         self.entries_next_button.setEnabled(self._entries_page_offset + len(page_entries) < len(visible_entries))
         self.entries_page_label.setText(f'Page {current_page} / {page_count}' if page_count else 'Page 0 / 0')
 
+        selected_id = self._selected_entry_id()
+        previous_signals_blocked = self.table.blockSignals(True)
         self.table.setUpdatesEnabled(False)
         self.table.setRowCount(0)
+        selected_row = -1
         for entry in page_entries:
             row = self.table.rowCount()
             self.table.insertRow(row)
@@ -966,7 +977,16 @@ class RobloxCacheTab(QWidget):
                 if column == 0:
                     item.setData(Qt.ItemDataRole.UserRole, entry.entry_id)
                 self.table.setItem(row, column, item)
+            if entry.entry_id == selected_id:
+                selected_row = row
         self.table.setUpdatesEnabled(True)
+        if selected_row >= 0:
+            self.table.selectRow(selected_row)
+        else:
+            self.table.clearSelection()
+        self.table.blockSignals(previous_signals_blocked)
+        if selected_id and selected_row < 0:
+            self._selection_changed()
         self.table.resizeColumnsToContents()
         self.table.setColumnWidth(0, 270)
         self.table.setColumnWidth(8, 400)
@@ -999,7 +1019,7 @@ class RobloxCacheTab(QWidget):
         self.stop_preview_button.setVisible(True)
         self._preview_stopped = False
         display_name = self._entry_name(entry)
-        cached = self._cache_metadata.get(entry_id, {})
+        cached = self._entry_metadata(entry)
         self.preview_title.setText(display_name or f'{entry.kind.upper()} · {entry.entry_id[:12]}')
         asset_id = entry.asset_id or cached.get('asset_id')
         if asset_id:
@@ -1023,6 +1043,12 @@ class RobloxCacheTab(QWidget):
             f'Swap status: {entry.swap_status or "unmodified"}',
             f'Storage: {entry.storage_mode}',
         ]
+        if cached.get('creator_name'):
+            details.append(f'Creator: {cached["creator_name"]}')
+        if cached.get('created_at'):
+            details.append(f'Created: {cached["created_at"]}')
+        if cached.get('updated_at'):
+            details.append(f'Updated: {cached["updated_at"]}')
         if cached.get('asset_type_label'):
             details.append(f'Roblox asset type: {cached["asset_type_label"]}')
         if cached.get('asset_version'):
