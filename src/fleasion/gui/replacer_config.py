@@ -987,6 +987,7 @@ class ReplacerConfigWindow(QDialog):
     def _create_replacer_tab(self):
         """Build the original Asset-ID Replacer as the single main Replacer view."""
         replacer_widget = QWidget()
+        self._asset_id_replacer_tab = replacer_widget
         replacer_layout = QVBoxLayout(replacer_widget)
         replacer_layout.setContentsMargins(0, 0, 0, 0)
 
@@ -997,10 +998,12 @@ class ReplacerConfigWindow(QDialog):
 
         self._create_config_section(top_section_layout)
         self._create_tree_section(top_section_layout)
-        replacer_layout.addWidget(QLabel(
+        asset_id_note = QLabel(
             "Asset ID rules are the original proxy-based workflow. For direct local Roblox cache "
             "replacement without the HTTP proxy, use Miscellaneous → Asset Hash."
-        ))
+        )
+        asset_id_note.setWordWrap(True)
+        replacer_layout.addWidget(asset_id_note)
         replacer_layout.addWidget(top_section_widget)
         self._create_edit_section(replacer_layout)
         self._create_footer(replacer_layout)
