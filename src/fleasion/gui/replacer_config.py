@@ -762,27 +762,28 @@ class ReplacerConfigWindow(QDialog):
         from .local_database_editor import LocalDatabaseEditorWidget
         from .roblox_cache_tab import RobloxCacheTab
 
-        # Active swaps are the Local DB home page. Cache Slots and Asset Database
-        # are separate top-level tabs rather than nested under the swaps UI.
+        # Keep swaps, the unified asset inventory and direct SQLite tools as
+        # separate top-level workflows. Asset Explorer owns cache discovery;
+        # SQLite Browser is intentionally advanced-only.
         self._roblox_cache_tab = RobloxCacheTab(
             self,
             config_manager=self.config_manager,
             view_mode='swaps',
         )
-        self._cache_slots_tab = RobloxCacheTab(
+        self._asset_explorer_tab = RobloxCacheTab(
             self,
             config_manager=self.config_manager,
             view_mode='slots',
         )
-        self._local_database_editor_tab = LocalDatabaseEditorWidget(
+        self._sqlite_browser_tab = LocalDatabaseEditorWidget(
             self,
             embedded=True,
             config_manager=self.config_manager,
         )
 
-        self.tab_widget.addTab(self._roblox_cache_tab, 'Local DB')
-        self.tab_widget.addTab(self._cache_slots_tab, 'Cache Slots')
-        self.tab_widget.addTab(self._local_database_editor_tab, 'Asset Database')
+        self.tab_widget.addTab(self._roblox_cache_tab, 'Swaps')
+        self.tab_widget.addTab(self._asset_explorer_tab, 'Asset Explorer')
+        self.tab_widget.addTab(self._sqlite_browser_tab, 'SQLite Browser')
 
         # Keep only miscellaneous utilities that work without HTTP interception.
         from .rando_stuff_tab import RandoStuffTab
@@ -805,10 +806,10 @@ class ReplacerConfigWindow(QDialog):
             parent=self,
         )
         self._settings_tab.probe_header_visibility_changed.connect(
-            self._cache_slots_tab.set_probe_header_enabled
+            self._asset_explorer_tab.set_probe_header_enabled
         )
         self._settings_tab.asset_database_preview_visibility_changed.connect(
-            self._local_database_editor_tab.asset_explorer.set_preview_enabled
+            self._asset_explorer_tab.set_preview_enabled
         )
         self.tab_widget.addTab(
             self._settings_tab,
