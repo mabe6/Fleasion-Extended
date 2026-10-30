@@ -333,6 +333,12 @@ class RobloxCacheTab(QWidget):
             if isinstance(settings, dict) else {}
         )
         self._cache_metadata = dict(cached_metadata) if isinstance(cached_metadata, dict) else {}
+        saved_kinds = settings.get('local_db_asset_kinds', []) if isinstance(settings, dict) else []
+        valid_kinds = {kind for kind, _label in _KIND_FILTER_OPTIONS}
+        self._active_kind_filters = (
+            {str(kind) for kind in saved_kinds} & valid_kinds
+            if isinstance(saved_kinds, list) else set()
+        )
         self._name_resolver = None
         self._name_resolution_attempted: set[str] = set()
         self._name_resolution_disabled = False
@@ -517,42 +523,11 @@ class RobloxCacheTab(QWidget):
         self.search_edit.textChanged.connect(self._entry_filters_changed)
         search_row.addWidget(self.search_edit, 2)
 
-        self.kind_filter_combo = QComboBox()
-        for label, value in (
-            ('All types', 'all'),
-            ('Images / textures', 'images'),
-            ('KTX textures', 'ktx'),
-            ('Meshes', 'mesh'),
-            ('Collision / physics meshes', 'csgphs'),
-            ('Roblox models', 'models'),
-            ('Animations', 'animations'),
-            ('Audio', 'audio'),
-            ('Fonts', 'font'),
-            ('JSON', 'json'),
-            ('Asset metadata', 'asset-metadata'),
-            ('Roblox settings (DCZ)', 'roblox-settings'),
-            ('Video metadata', 'video-metadata'),
-            ('HLS video playlist', 'video-manifest'),
-            ('HTTP response headers', 'http-response'),
-            ('PNG', 'png'),
-            ('JPEG', 'jpg'),
-            ('BMP', 'bmp'),
-            ('GIF', 'gif'),
-            ('WebP', 'webp'),
-            ('TIFF', 'tiff'),
-            ('ICO', 'ico'),
-            ('DDS', 'dds'),
-            ('PSD', 'psd'),
-            ('RBXM', 'rbxm'),
-            ('XML', 'xml'),
-            ('Curve animation', 'curve-anim'),
-            ('OGG', 'ogg'),
-            ('MP3', 'mp3'),
-            ('Other', 'other'),
-        ):
-            self.kind_filter_combo.addItem(label, value)
-        self.kind_filter_combo.currentIndexChanged.connect(self._entry_filters_changed)
-        search_row.addWidget(self.kind_filter_combo)
+        self.kind_filter_button = QPushButton('All types')
+        self.kind_filter_button.setToolTip('Search and select one or more asset types')
+        self.kind_filter_button.clicked.connect(self._show_kind_filter)
+        self._update_kind_filter_button()
+        search_row.addWidget(self.kind_filter_button)
 
         self.slot_status_filter = QComboBox()
         for label, value in (
@@ -815,7 +790,7 @@ class RobloxCacheTab(QWidget):
             query = query.replace(match.group(0).casefold(), ' ', 1)
         query = ' '.join(query.split())
 
-        kind_filter = self.kind_filter_combo.currentData()
+        kind_filter = self._active_kind_filters
         status_filter = self.slot_status_filter.currentData()
         image_kinds = _IMAGE_KINDS
         model_kinds = {'rbxm', 'xml'}
@@ -878,37 +853,7 @@ class RobloxCacheTab(QWidget):
             if not matches:
                 continue
 
-            if kind_filter == 'images' and entry.kind not in image_kinds:
-                continue
-            if kind_filter == 'ktx' and entry.kind != 'ktx':
-                continue
-            if kind_filter == 'mesh' and entry.kind != 'mesh':
-                continue
-            if kind_filter == 'models' and entry.kind not in model_kinds:
-                continue
-            if kind_filter == 'animations' and entry.kind not in animation_kinds:
-                continue
-            if kind_filter == 'audio' and entry.kind not in audio_kinds:
-                continue
-            if kind_filter == 'font' and entry.kind != 'font':
-                continue
-            if kind_filter == 'json' and entry.kind != 'json':
-                continue
-            exact_kinds = {
-                'png', 'jpg', 'bmp', 'gif', 'webp', 'tiff', 'ico', 'dds', 'ktx', 'psd',
-                'mesh', 'rbxm', 'xml', 'anim', 'curve-anim', 'ogg', 'mp3', 'font',
-                'asset-metadata', 'roblox-settings', 'video-metadata', 'video-manifest',
-                'http-response', 'csgphs',
-            }
-            if kind_filter in exact_kinds and entry.kind != kind_filter:
-                continue
-            if kind_filter == 'other' and entry.kind in (
-                image_kinds | model_kinds | animation_kinds | audio_kinds
-                | {
-                    'font', 'json', 'mesh', 'asset-metadata', 'roblox-settings',
-                    'video-metadata', 'video-manifest', 'http-response', 'csgphs',
-                }
-            ):
+            if kind_filter and entry.kind not in kind_filter:
                 continue
 
             if status_filter == 'unmodified' and entry.swap_status:
@@ -919,6 +864,49 @@ class RobloxCacheTab(QWidget):
                 continue
             visible.append(entry)
         return visible
+
+    def _show_kind_filter(self) -> None:
+        popup = _KindFilterPopup(
+            _KIND_FILTER_OPTIONS,
+            self._active_kind_filters,
+            parent=self,
+        )
+        popup.changed.connect(self._on_kind_filters_changed)
+        popup.aboutToHide.connect(popup.deleteLater)
+        popup.exec(self.kind_filter_button.mapToGlobal(self.kind_filter_button.rect().bottomLeft()))
+
+    def _on_kind_filters_changed(self, kinds: set[str]) -> None:
+        valid = {kind for kind, _label in _KIND_FILTER_OPTIONS}
+        self._active_kind_filters = {str(kind) for kind in kinds} & valid
+        self._update_kind_filter_button()
+        settings = getattr(self.config_manager, 'settings', None)
+        if isinstance(settings, dict):
+            settings['local_db_asset_kinds'] = sorted(self._active_kind_filters)
+            save = getattr(self.config_manager, 'save', None)
+            if callable(save):
+                try:
+                    save()
+                except Exception as exc:
+                    log_buffer.log('LocalCache', f'Could not save asset type filters: {exc}')
+        self._entry_filters_changed()
+
+    def _update_kind_filter_button(self) -> None:
+        labels = dict(_KIND_FILTER_OPTIONS)
+        selected = self._active_kind_filters
+        all_kinds = set(labels)
+        if not selected or selected >= all_kinds:
+            title = 'All types'
+        elif len(selected) == 1:
+            title = labels.get(next(iter(selected)), '1 type')
+        else:
+            title = f'{len(selected)} types'
+        self.kind_filter_button.setText(title)
+        if selected and selected < all_kinds:
+            self.kind_filter_button.setToolTip(
+                'Showing: ' + ', '.join(labels[kind] for kind in _KIND_FILTER_OPTIONS if kind in selected)
+            )
+        else:
+            self.kind_filter_button.setToolTip('Search and select one or more asset types')
 
     def _entry_filters_changed(self, *_args) -> None:
         self._entries_page_offset = 0
