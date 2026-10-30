@@ -496,6 +496,37 @@ class RbxmPreviewWidget(QWidget):
             visit(root)
         return names
 
+    def animation_paths(self) -> list[str]:
+        """Return animations using their full nested Folder path, without flattening names."""
+        if self.document is None:
+            return []
+
+        animation_classes = {'Animation', 'KeyframeSequence', 'CurveAnimation', 'MoodAnimation'}
+        paths: list[str] = []
+        seen: set[str] = set()
+
+        def add_path(parts: list[str]) -> None:
+            cleaned = [str(part).strip() for part in parts if str(part).strip()]
+            if not cleaned:
+                return
+            value = ' / '.join(cleaned)
+            if value.casefold() not in seen:
+                seen.add(value.casefold())
+                paths.append(value)
+
+        def visit(instance: PreviewInstance, folders: list[str]) -> None:
+            current_folders = folders
+            if instance.class_name == 'Folder' and instance.name:
+                current_folders = [*folders, instance.name]
+            if instance.class_name in animation_classes:
+                add_path([*current_folders, instance.name or instance.class_name])
+            for child in instance.children:
+                visit(child, current_folders)
+
+        for root in self.document.roots:
+            visit(root, [])
+        return paths
+
     def _populate_tree(self, asset_label: str) -> None:
         self.tree.clear()
         self.properties_table.setRowCount(0)
@@ -525,9 +556,31 @@ class RbxmPreviewWidget(QWidget):
         )
 
         if self.tree.topLevelItemCount():
-            first = self.tree.topLevelItem(0)
-            self.tree.setCurrentItem(first)
-            first.setExpanded(True)
+            # Prefer a real instance with stored properties. A generic root Folder
+            # has only the synthetic ClassName/Referent rows and looked like an empty table.
+            def first_property_item(item: QTreeWidgetItem) -> QTreeWidgetItem | None:
+                instance = self._item_to_instance.get(id(item))
+                if instance is not None and instance.properties:
+                    return item
+                for child_index in range(item.childCount()):
+                    found = first_property_item(item.child(child_index))
+                    if found is not None:
+                        return found
+                return None
+
+            selected = None
+            for root_index in range(self.tree.topLevelItemCount()):
+                selected = first_property_item(self.tree.topLevelItem(root_index))
+                if selected is not None:
+                    break
+            if selected is None:
+                selected = self.tree.topLevelItem(0)
+            parent = selected.parent()
+            while parent is not None:
+                parent.setExpanded(True)
+                parent = parent.parent()
+            selected.setExpanded(True)
+            self.tree.setCurrentItem(selected)
         self._on_search_changed(self.search_input.text())
 
     def _add_instance_item(
