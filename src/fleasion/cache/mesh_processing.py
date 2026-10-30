@@ -607,7 +607,7 @@ def _mesh_header(data: bytes) -> str:
 
 
 def _decompress_mesh_data(data: bytes) -> bytes | None:
-    if data.startswith(b'\\x1f\\x8b'):
+    if data.startswith(b'\x1f\x8b'):
         try:
             return gzip.decompress(data)
         except (OSError, EOFError):
