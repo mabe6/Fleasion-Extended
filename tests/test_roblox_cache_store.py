@@ -629,3 +629,18 @@ def test_roblox_asset_type_header_does_not_require_two_known_headers():
     assert parsed is not None
     assert parsed[0]['roblox-assettypeid'] == '78'
     assert detect_roblox_payload_kind(response) == 'asset-metadata'
+
+
+def test_roblox_asset_header_without_blank_separator_still_previews_image():
+    image = b'\x89PNG\r\n\x1a\n' + bytes(64)
+    response = b'roblox-assettypeid: 1\r\ncontent-type: image/png\r\n' + image
+    parsed = store_module.parse_cached_http_response(response)
+    assert parsed is not None
+    headers, body = parsed
+    assert headers['roblox-assettypeid'] == '1'
+    assert body == image
+    kind = detect_roblox_payload_kind(response)
+    assert kind == 'png'
+    extracted = store_module.extract_cached_http_response_asset_payload(response)
+    assert extracted is not None
+    assert extracted[0] == image
