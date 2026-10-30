@@ -28,7 +28,6 @@ ASSET_ID_PATTERN = re.compile(r'[?&]id=(\d+)|assetId[=/](\d+)|/asset/(\d+)', re.
 RBXH_META_SIZE = 25
 ENTRY_HEAD_READ = 8192
 MAX_IMPORT_BYTES = 100_000_000
-MAX_ENTRY_READ_BYTES = 500_000_000
 _ZSTD_MAGIC = b'\x28\xb5\x2f\xfd'
 _GZIP_MAGIC = b'\x1f\x8b'
 
@@ -413,15 +412,10 @@ class RobloxCacheStore:
         if record is None:
             record = self._read_database_record(entry_id)
         if record is not None and isinstance(record.get('content'), bytes):
-            data = record['content']
-            if len(data) > MAX_ENTRY_READ_BYTES:
-                raise RobloxCacheError(f'Entry exceeds the {MAX_ENTRY_READ_BYTES:,}-byte safety limit.')
-            return data, 'database'
+            return record['content'], 'database'
         physical = self._entry_path(entry_id)
         for path, mode in ((physical, 'file'), (self.library_dir / entry_id, 'library')):
             if path.is_file():
-                if path.stat().st_size > MAX_ENTRY_READ_BYTES:
-                    raise RobloxCacheError(f'Entry exceeds the {MAX_ENTRY_READ_BYTES:,}-byte safety limit.')
                 return path.read_bytes(), mode
         raise RobloxCacheError(f'Entry {entry_id} has no content BLOB or physical cache file.')
 
