@@ -357,7 +357,7 @@ class RobloxCacheTab(QWidget):
         self.swaps_table.itemDoubleClicked.connect(self._load_selected_swap)
         active_layout.addWidget(self.swaps_table, 1)
         self.swap_empty_label = QLabel(
-            'No saved swaps yet. Use Scraper DB to browse local entries, then choose a target and replacement ID.'
+            'No saved swaps yet. Use Scraper DB to find cache hashes, then choose a target and replacement hash.'
         )
         self.swap_empty_label.setWordWrap(True)
         self.swap_empty_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -379,14 +379,14 @@ class RobloxCacheTab(QWidget):
         edit_layout.addLayout(name_row)
 
         ids_row = QHBoxLayout()
-        ids_row.addWidget(QLabel('Target cache ID:'))
+        ids_row.addWidget(QLabel('Target cache hash:'))
         self.target_edit = QLineEdit()
-        self.target_edit.setPlaceholderText('Paste the 32-character cache ID to replace')
+        self.target_edit.setPlaceholderText('Paste the 32-character cache hash to replace')
         self.target_edit.setClearButtonEnabled(True)
         ids_row.addWidget(self.target_edit, 1)
         ids_row.addWidget(QLabel('Replace with:'))
         self.source_edit = QLineEdit()
-        self.source_edit.setPlaceholderText('Paste the 32-character replacement cache ID')
+        self.source_edit.setPlaceholderText('Paste the 32-character replacement cache hash')
         self.source_edit.setClearButtonEnabled(True)
         ids_row.addWidget(self.source_edit, 1)
         edit_layout.addLayout(ids_row)
@@ -472,7 +472,7 @@ class RobloxCacheTab(QWidget):
 
         self.table = QTableWidget(0, 10)
         self.table.setHorizontalHeaderLabels(
-            ['Entry ID', 'Asset ID', 'Kind', 'File/content size', 'DB size', 'Modified', 'Swap status', 'Storage', 'URL', 'Name']
+            ['Cache hash', 'Roblox Asset ID', 'Kind', 'File/content size', 'DB size', 'Modified', 'Swap status', 'Storage', 'URL', 'Name']
         )
         self.table.horizontalHeader().moveSection(9, 1)
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
@@ -571,10 +571,10 @@ class RobloxCacheTab(QWidget):
         entries_layout.addLayout(paging_row)
 
         inventory_actions = QHBoxLayout()
-        set_target = QPushButton('Copy to target ID')
+        set_target = QPushButton('Use cache hash as target')
         set_target.clicked.connect(self._set_selected_as_target)
         inventory_actions.addWidget(set_target)
-        set_source = QPushButton('Copy to replacement ID')
+        set_source = QPushButton('Use cache hash as replacement')
         set_source.clicked.connect(self._set_selected_as_source)
         inventory_actions.addWidget(set_source)
         import_button = QPushButton('Import File → Target…')
@@ -754,11 +754,16 @@ class RobloxCacheTab(QWidget):
         copy_menu = menu.addMenu('Copy')
         copy_rows_action = copy_menu.addAction('Selected rows (TSV)')
         copy_menu.addSeparator()
-        copy_id_action = copy_menu.addAction('Entry ID')
-        copy_asset_id_action = copy_menu.addAction('Asset ID')
+        copy_id_action = copy_menu.addAction('Cache hash (32-char)')
+        copy_asset_id_action = copy_menu.addAction('Roblox Asset ID (when known)')
         copy_kind_action = copy_menu.addAction('Kind')
         copy_name_action = copy_menu.addAction('Name')
         copy_url_action = copy_menu.addAction('URL')
+        copy_asset_id_action.setEnabled(any(
+            (self.table.item(row, 1).text().strip() not in {"", "—"})
+            for row in selected_rows
+            if self.table.item(row, 1) is not None
+        ))
 
         action = menu.exec(self.table.viewport().mapToGlobal(position))
         if action == copy_rows_action:
@@ -1216,7 +1221,7 @@ class RobloxCacheTab(QWidget):
         self.table.resizeColumnsToContents()
         self.table.setColumnWidth(0, 270)
         self.table.setColumnWidth(8, 400)
-        self.table.setColumnWidth(9, 220)
+        self.table.setColumnWidth(9, 110)
         self.entries_count_label.setText(
             f'{len(visible_entries):,} / {len(self.entries):,} entries'
             if len(visible_entries) != len(self.entries) else f'{len(self.entries):,} entries'
@@ -1516,7 +1521,11 @@ class RobloxCacheTab(QWidget):
                 self.preview_stack.setCurrentWidget(self.preview_info)
                 self._track_decoder_worker('_mesh_loader', mesh_loader)
             elif kind == 'asset-metadata':
-                self.preview_text.setPlainText(payload.decode('ascii', errors='replace').strip())
+                from ..utils.asset_lookup import format_asset_metadata_preview
+
+                self.preview_text.setPlainText(
+                    format_asset_metadata_preview(payload, asset_id=entry.asset_id or '')
+                )
                 self.preview_stack.setCurrentWidget(self.preview_text)
             elif kind in {'roblox-settings', 'video-metadata', 'video-manifest', 'http-response'}:
                 self.preview_text.setPlainText(
@@ -1585,6 +1594,12 @@ class RobloxCacheTab(QWidget):
                     self._model_panel.add_property_btn.setEnabled(False)
                     self.preview_stack.addWidget(self._model_panel)
                 self._model_panel.load_bytes(payload, entry.asset_id or entry.entry_id[:12])
+                model_note = (
+                    "Model contents: object hierarchy and properties. "
+                    "RBXM/XML 3D scene rendering is not available yet."
+                )
+                if model_note not in self.preview_details.text():
+                    self.preview_details.setText(self.preview_details.text() + "\\n" + model_note)
                 model_name = (
                     self._model_panel.document.roots[0].name.strip()
                     if self._model_panel.document and self._model_panel.document.roots
