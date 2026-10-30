@@ -1612,6 +1612,38 @@ class RobloxCacheTab(QWidget):
                     and b'<roblox' in payload[:2048]
                 )
             ):
+                # Binary RBXM chunks can be compressed independently. Their
+                # class names (KeyframeSequence / CurveAnimation) may therefore
+                # be invisible to the cheap byte-signature classifier. Let the
+                # animation parser inspect the full document before treating it
+                # as a generic model.
+                from ..cache.animation_viewer import AnimationViewerPanel
+
+                if self._animation_panel is None:
+                    self._animation_panel = AnimationViewerPanel(
+                        config_manager=self.config_manager
+                    )
+                    self.preview_stack.addWidget(self._animation_panel)
+                try:
+                    contains_playable_animation = self._animation_panel.load_animation(payload)
+                except Exception as exc:
+                    contains_playable_animation = False
+                    log_buffer.log(
+                        'LocalCache',
+                        f'RBXM animation fallback failed: {type(exc).__name__}: {exc}',
+                    )
+                if contains_playable_animation:
+                    self.preview_stack.setCurrentWidget(self._animation_panel)
+                    animation_note = (
+                        "Animation clip detected inside the Roblox document "
+                        "(KeyframeSequence / CurveAnimation)."
+                    )
+                    if animation_note not in self.preview_details.text():
+                        self.preview_details.setText(
+                            self.preview_details.text() + "\n" + animation_note
+                        )
+                    return
+
                 from ..cache.rbxm_preview import RbxmPreviewWidget
 
                 if self._model_panel is None:
