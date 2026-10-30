@@ -51,7 +51,7 @@ def test_local_db_opens_on_active_swaps_with_pasteable_ids_and_optional_probe(
     try:
         assert [widget.pages.tabText(i) for i in range(widget.pages.count())] == [
             "Active Swaps",
-            "Asset Explorer",
+            "Scraper DB",
         ]
         assert widget.pages.currentIndex() == 0
         assert not widget.swaps_page.isHidden()
@@ -59,7 +59,7 @@ def test_local_db_opens_on_active_swaps_with_pasteable_ids_and_optional_probe(
         assert widget.swaps_table.item(0, 0).text() == "Active"
         assert widget.swaps_table.item(0, 1).text() == "Replace idle animation"
         assert widget.swap_count_label.text() == "1 swaps"
-        assert widget.pages.tabText(1) == 'Asset Explorer'
+        assert widget.pages.tabText(1) == 'Scraper DB'
 
         widget.swap_filter_edit.setText("no matching swap")
         assert widget.swaps_table.rowCount() == 0
