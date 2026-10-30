@@ -483,8 +483,19 @@ class RobloxCacheStore:
                 if row is not None and bool(row['has_content']):
                     content_size = int(row['content_size'] or 0)
 
+                    first_size = max(chunk_size, ENTRY_HEAD_READ)
+                    first_row = connection.execute(
+                        'SELECT substr(content, 1, ?) FROM files WHERE id = ?',
+                        (first_size, bytes.fromhex(entry_id)),
+                    ).fetchone()
+                    first = first_row[0] if first_row else b''
+                    if isinstance(first, memoryview):
+                        first = first.tobytes()
+                    if not isinstance(first, bytes):
+                        first = b''
+
                     def blob_chunks():
-                        offset = 1
+                        offset = len(first) + 1
                         while offset <= content_size:
                             chunk = connection.execute(
                                 'SELECT substr(content, ?, ?) FROM files WHERE id = ?',
@@ -499,10 +510,6 @@ class RobloxCacheStore:
                             offset += len(data)
 
                     chunks = iter(blob_chunks())
-                    try:
-                        first = next(chunks)
-                    except StopIteration:
-                        first = b''
                     url, payload_offset = '', 0
                     try:
                         url, payload_offset = parse_rbxh_header(first)
@@ -528,7 +535,7 @@ class RobloxCacheStore:
                     f'Entry {entry_id} has no content BLOB or physical cache file.'
                 )
             with physical.open('rb') as source:
-                first = source.read(chunk_size)
+                first = source.read(max(chunk_size, ENTRY_HEAD_READ))
                 url, payload_offset = '', 0
                 try:
                     url, payload_offset = parse_rbxh_header(first)
