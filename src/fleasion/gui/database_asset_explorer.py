@@ -32,8 +32,10 @@ from PyQt6.QtWidgets import (
     QMessageBox,
     QPlainTextEdit,
     QPushButton,
+    QScrollArea,
     QSplitter,
     QStackedWidget,
+    QTabWidget,
     QTableWidget,
     QTableWidgetItem,
     QVBoxLayout,
@@ -47,6 +49,8 @@ from ..database.roblox_cache_store import (
     decompress_roblox_payload_file,
     detect_roblox_payload_kind,
     format_cached_http_response_preview,
+    is_roblox_compressed_payload,
+    parse_cached_http_response,
     split_rbxh_entry,
 )
 from ..database.sqlite_browser import SQLiteBrowser, SQLiteBrowserError, quote_identifier
@@ -157,7 +161,7 @@ def _detect_kind(sample: bytes) -> tuple[str, str]:
     url, payload, has_header = split_rbxh_entry(sample)
     if not has_header:
         payload = sample
-    if payload.startswith((b'\x1f\x8b', b'\x28\xb5\x2f\xfd')):
+    if is_roblox_compressed_payload(payload):
         return 'compressed', url
     kind = detect_roblox_payload_kind(payload, url=url)
     # Some XML assets contain animations but have no binary RBXM signature.
@@ -264,7 +268,7 @@ def _display_name(item: _AssetItem) -> str:
 
 
 class _CheckListPopup(QMenu):
-    """Non-closing multi-select popup used for the local asset type and search filters."""
+    """Searchable, scrollable multi-select popup for long filter lists."""
 
     changed = pyqtSignal(set)
 
@@ -284,11 +288,26 @@ class _CheckListPopup(QMenu):
             'QMenu { background: palette(window); border: 1px solid palette(mid); }'
             'QCheckBox { padding: 2px 4px; }'
         )
+        self.setMinimumWidth(260)
 
         container = QWidget()
         layout = QVBoxLayout(container)
         layout.setContentsMargins(10, 8, 10, 8)
-        layout.setSpacing(3)
+        layout.setSpacing(5)
+
+        self.filter_edit = QLineEdit()
+        self.filter_edit.setPlaceholderText('Filter types…')
+        self.filter_edit.textChanged.connect(self._apply_filter)
+        layout.addWidget(self.filter_edit)
+
+        self.scroll_area = QScrollArea()
+        self.scroll_area.setWidgetResizable(True)
+        self.scroll_area.setFrameShape(QFrame.Shape.NoFrame)
+        self.scroll_area.setFixedHeight(250)
+        checkbox_container = QWidget()
+        checkbox_layout = QVBoxLayout(checkbox_container)
+        checkbox_layout.setContentsMargins(0, 0, 0, 0)
+        checkbox_layout.setSpacing(2)
 
         for key, label in options:
             checkbox = QCheckBox(label)
@@ -297,7 +316,10 @@ class _CheckListPopup(QMenu):
                 lambda state, filter_key=key: self._toggle(filter_key, bool(state))
             )
             self.checkboxes[key] = checkbox
-            layout.addWidget(checkbox)
+            checkbox_layout.addWidget(checkbox)
+        checkbox_layout.addStretch(1)
+        self.scroll_area.setWidget(checkbox_container)
+        layout.addWidget(self.scroll_area)
 
         separator = QFrame()
         separator.setFrameShape(QFrame.Shape.HLine)
@@ -306,10 +328,10 @@ class _CheckListPopup(QMenu):
 
         buttons = QHBoxLayout()
         all_button = QPushButton(all_label)
-        all_button.setFixedHeight(24)
+        all_button.setFixedHeight(26)
         all_button.clicked.connect(self._select_all)
         clear_button = QPushButton(clear_label)
-        clear_button.setFixedHeight(24)
+        clear_button.setFixedHeight(26)
         clear_button.clicked.connect(self._clear)
         buttons.addWidget(all_button)
         buttons.addWidget(clear_button)
@@ -318,6 +340,11 @@ class _CheckListPopup(QMenu):
         action = QWidgetAction(self)
         action.setDefaultWidget(container)
         self.addAction(action)
+
+    def _apply_filter(self, text: str) -> None:
+        needle = text.strip().casefold()
+        for checkbox in self.checkboxes.values():
+            checkbox.setVisible(not needle or needle in checkbox.text().casefold())
 
     def _toggle(self, key: str, checked: bool) -> None:
         if checked:
@@ -501,6 +528,7 @@ class DatabaseAssetExplorer(QWidget):
         self._mesh_loader: QThread | None = None
         self._animation_panel: Any = None
         self._model_panel: Any = None
+        self._model_preview_tabs: QTabWidget | None = None
         self._mesh_panel: Any = None
         self._font_widget: Any = None
         self._audio_player: Any = None
@@ -1181,6 +1209,12 @@ class DatabaseAssetExplorer(QWidget):
         self._current_entry_id = item.entry_id
         self._current_request_id = item.entry_id
         self._preview_stopped = False
+        self.preview_title.show()
+        self.preview_details.show()
+        self.preview_stack.show()
+        self.copy_id_button.show()
+        self.copy_asset_button.show()
+        self.export_button.show()
         self.stop_preview_button.setVisible(self._preview_enabled)
         self.copy_id_button.setEnabled(True)
         self.copy_asset_button.setEnabled(bool(item.asset_id))
@@ -1290,6 +1324,12 @@ class DatabaseAssetExplorer(QWidget):
                 self._model_panel.hide()
             except Exception:
                 pass
+        if self._model_preview_tabs is not None:
+            try:
+                self._model_preview_tabs.setCurrentIndex(0)
+                self._model_preview_tabs.hide()
+            except Exception:
+                pass
         if self._mesh_panel is not None:
             try:
                 self._mesh_panel.clear()
@@ -1332,14 +1372,21 @@ class DatabaseAssetExplorer(QWidget):
         self._load_preview(selected)
 
     def _stop_preview(self) -> None:
-        """Cancel visible preview work without waiting on decoding in the UI thread."""
+        """Cancel preview work and collapse the entire preview pane."""
         self._preview_stopped = True
         self.stop_preview_button.setVisible(False)
         self._current_request_id = ''
         self._reset_preview_widgets()
-        self._show_info('Preview stopped. Click the selected row again to reopen it.')
+        self.preview_panel.hide()
 
     def _load_preview(self, item: _AssetItem) -> None:
+        self.preview_panel.show()
+        self.preview_title.show()
+        self.preview_details.show()
+        self.preview_stack.show()
+        self.copy_id_button.show()
+        self.copy_asset_button.show()
+        self.export_button.show()
         self._reset_preview_widgets()
         request_id = item.entry_id
         self._current_request_id = request_id
@@ -1401,19 +1448,74 @@ class DatabaseAssetExplorer(QWidget):
                 self._track_decoder_worker('_image_loader', image_loader)
                 self.info_preview.setText('Loading image preview…')
                 self.preview_stack.setCurrentWidget(self.info_preview)
-            elif item.kind in {'anim', 'curve-anim'}:
-                from ..cache.animation_viewer import AnimationViewerPanel
+            elif item.kind in {'anim', 'curve-anim', 'rbxm', 'xml'} and (
+                payload.startswith(b'<roblox!') or payload.lstrip().startswith(b'<roblox')
+            ):
+                from ..cache.rbxm_preview import RbxmPreviewWidget
 
-                if self._animation_panel is None:
-                    self._animation_panel = AnimationViewerPanel(config_manager=self.config_manager)
-                    self.preview_stack.addWidget(self._animation_panel)
-                if self._animation_panel.load_animation(payload):
-                    self.preview_stack.setCurrentWidget(self._animation_panel)
-                else:
-                    self._show_info(
-                        'Animation format detected, but no playable keyframes could be loaded. '
-                        'Export the payload if you need to inspect it with another tool.'
+                if self._model_panel is None:
+                    self._model_panel = RbxmPreviewWidget()
+                    self._model_panel.tree.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+                    self._model_panel.properties_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+                    self._model_panel.tree.setContextMenuPolicy(Qt.ContextMenuPolicy.NoContextMenu)
+                    self._model_panel.properties_table.setContextMenuPolicy(Qt.ContextMenuPolicy.NoContextMenu)
+                    self._model_panel.add_child_btn.setEnabled(False)
+                    self._model_panel.add_property_btn.setEnabled(False)
+                if self._model_preview_tabs is None:
+                    self._model_preview_tabs = QTabWidget()
+                    self._model_preview_tabs.addTab(self._model_panel, 'Structure')
+                    self.preview_stack.addWidget(self._model_preview_tabs)
+
+                self._model_panel.load_bytes(payload, item.asset_id or item.entry_id[:12])
+                animation_paths = self._model_panel.animation_paths()
+                if animation_paths:
+                    shown_paths = animation_paths[:40]
+                    suffix = (
+                        f'\n… and {len(animation_paths) - len(shown_paths)} more'
+                        if len(animation_paths) > len(shown_paths) else ''
                     )
+                    self.preview_details.setText(
+                        self.preview_details.text()
+                        + '\nAnimations: ' + '\n• '.join(shown_paths) + suffix
+                    )
+
+                # Keep the structure tree available for animation assets as well as playback.
+                if item.kind in {'anim', 'curve-anim'}:
+                    from ..cache.animation_viewer import AnimationViewerPanel
+
+                    if self._animation_panel is None:
+                        self._animation_panel = AnimationViewerPanel(
+                            config_manager=self.config_manager
+                        )
+                    loaded = self._animation_panel.load_animation(payload)
+                    tab_index = self._model_preview_tabs.indexOf(self._animation_panel)
+                    if loaded and tab_index < 0:
+                        self._model_preview_tabs.addTab(self._animation_panel, 'Playback')
+                    elif not loaded and tab_index >= 0:
+                        self._model_preview_tabs.removeTab(tab_index)
+                    if not loaded:
+                        self.preview_details.setText(
+                            self.preview_details.text()
+                            + '\nPlayback decoder could not load keyframes; the full structure remains available.'
+                        )
+                elif self._animation_panel is not None:
+                    tab_index = self._model_preview_tabs.indexOf(self._animation_panel)
+                    if tab_index >= 0:
+                        self._model_preview_tabs.removeTab(tab_index)
+
+                if self._model_panel.document and self._model_panel.document.roots:
+                    root_name = self._model_panel.document.roots[0].name.strip()
+                    generic_names = {'folder', 'model', 'workspace', 'datamodel', 'instance'}
+                    if root_name and root_name.casefold() not in generic_names and not item.name:
+                        item.name = root_name
+                        self.preview_title.setText(root_name)
+                        current_row = self.asset_table.currentRow()
+                        name_cell = self.asset_table.item(current_row, 1) if current_row >= 0 else None
+                        if name_cell is not None:
+                            name_cell.setText(root_name)
+
+                self._model_preview_tabs.setCurrentIndex(0)
+                self.preview_stack.setCurrentWidget(self._model_preview_tabs)
             elif item.kind == 'mesh':
                 from ..cache.cache_viewer import MeshLoaderThread
 
@@ -1427,62 +1529,6 @@ class DatabaseAssetExplorer(QWidget):
                 self._track_decoder_worker('_mesh_loader', mesh_loader)
                 self.info_preview.setText('Converting mesh to a 3D preview…')
                 self.preview_stack.setCurrentWidget(self.info_preview)
-            elif item.kind == 'rbxm' and (
-                payload.startswith(b'<roblox!') or payload.lstrip().startswith(b'<roblox')
-            ):
-                from ..cache.rbxm_preview import RbxmPreviewWidget
-
-                if self._model_panel is None:
-                    self._model_panel = RbxmPreviewWidget()
-                    self._model_panel.tree.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
-                    self._model_panel.properties_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
-                    self._model_panel.tree.setContextMenuPolicy(Qt.ContextMenuPolicy.NoContextMenu)
-                    self._model_panel.properties_table.setContextMenuPolicy(Qt.ContextMenuPolicy.NoContextMenu)
-                    self._model_panel.add_child_btn.setEnabled(False)
-                    self._model_panel.add_property_btn.setEnabled(False)
-                    self.preview_stack.addWidget(self._model_panel)
-                self._model_panel.load_bytes(payload, item.asset_id or item.entry_id[:12])
-                animation_names = self._model_panel.animation_names()
-                if animation_names:
-                    self.preview_details.setText(
-                        self.preview_details.text()
-                        + '\nAnimations in model: ' + ', '.join(animation_names[:30])
-                    )
-                if self._model_panel.document and self._model_panel.document.roots:
-                    root_name = self._model_panel.document.roots[0].name
-                    if root_name:
-                        item.name = root_name
-                        self.preview_title.setText(root_name)
-                        self._render_items()
-                self.preview_stack.setCurrentWidget(self._model_panel)
-            elif item.kind in {'xml'} and (
-                payload.startswith(b'<roblox!') or payload.lstrip().startswith(b'<roblox')
-            ):
-                from ..cache.rbxm_preview import RbxmPreviewWidget
-
-                if self._model_panel is None:
-                    self._model_panel = RbxmPreviewWidget()
-                    self._model_panel.tree.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
-                    self._model_panel.properties_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
-                    self._model_panel.tree.setContextMenuPolicy(Qt.ContextMenuPolicy.NoContextMenu)
-                    self._model_panel.properties_table.setContextMenuPolicy(Qt.ContextMenuPolicy.NoContextMenu)
-                    self._model_panel.add_child_btn.setEnabled(False)
-                    self._model_panel.add_property_btn.setEnabled(False)
-                    self.preview_stack.addWidget(self._model_panel)
-                self._model_panel.load_bytes(payload, item.asset_id or item.entry_id[:12])
-                animation_names = self._model_panel.animation_names()
-                if animation_names:
-                    self.preview_details.setText(
-                        self.preview_details.text()
-                        + '\nAnimations in model: ' + ', '.join(animation_names[:30])
-                    )
-                if self._model_panel.document and self._model_panel.document.roots:
-                    root_name = self._model_panel.document.roots[0].name
-                    if root_name:
-                        item.name = root_name
-                        self.preview_title.setText(root_name)
-                        self._render_items()
-                self.preview_stack.setCurrentWidget(self._model_panel)
             elif item.kind in _AUDIO_KINDS:
                 self._load_audio_preview(payload, item, request_id)
             elif item.kind == 'font':
