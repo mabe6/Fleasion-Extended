@@ -1612,37 +1612,48 @@ class RobloxCacheTab(QWidget):
                     and b'<roblox' in payload[:2048]
                 )
             ):
-                # Binary RBXM chunks can be compressed independently. Their
-                # class names (KeyframeSequence / CurveAnimation) may therefore
-                # be invisible to the cheap byte-signature classifier. Let the
-                # animation parser inspect the full document before treating it
-                # as a generic model.
-                from ..cache.animation_viewer import AnimationViewerPanel
+                # Avoid running the animation parser over every large model.
+                # For normal, uncompressed documents the class marker is enough;
+                # if it is hidden in binary chunks, use the already-resolved Roblox
+                # asset type as a narrow fallback before attempting animation decode.
+                resolved_metadata = self._entry_metadata(entry)
+                asset_type_id = str(resolved_metadata.get('asset_type_id') or '')
+                known_animation_types = {
+                    '24', '48', '49', '50', '51', '52', '53', '54', '55', '56', '61', '78'
+                }
+                has_animation_marker = (
+                    b'KeyframeSequence' in payload or b'CurveAnimation' in payload
+                )
+                possible_animation = (
+                    has_animation_marker or asset_type_id in known_animation_types
+                )
+                if possible_animation:
+                    from ..cache.animation_viewer import AnimationViewerPanel
 
-                if self._animation_panel is None:
-                    self._animation_panel = AnimationViewerPanel(
-                        config_manager=self.config_manager
-                    )
-                    self.preview_stack.addWidget(self._animation_panel)
-                try:
-                    contains_playable_animation = self._animation_panel.load_animation(payload)
-                except Exception as exc:
-                    contains_playable_animation = False
-                    log_buffer.log(
-                        'LocalCache',
-                        f'RBXM animation fallback failed: {type(exc).__name__}: {exc}',
-                    )
-                if contains_playable_animation:
-                    self.preview_stack.setCurrentWidget(self._animation_panel)
-                    animation_note = (
-                        "Animation clip detected inside the Roblox document "
-                        "(KeyframeSequence / CurveAnimation)."
-                    )
-                    if animation_note not in self.preview_details.text():
-                        self.preview_details.setText(
-                            self.preview_details.text() + "\n" + animation_note
+                    if self._animation_panel is None:
+                        self._animation_panel = AnimationViewerPanel(
+                            config_manager=self.config_manager
                         )
-                    return
+                        self.preview_stack.addWidget(self._animation_panel)
+                    try:
+                        contains_playable_animation = self._animation_panel.load_animation(payload)
+                    except Exception as exc:
+                        contains_playable_animation = False
+                        log_buffer.log(
+                            'LocalCache',
+                            f'RBXM animation fallback failed: {type(exc).__name__}: {exc}',
+                        )
+                    if contains_playable_animation:
+                        self.preview_stack.setCurrentWidget(self._animation_panel)
+                        animation_note = (
+                            "Animation clip detected inside the Roblox document "
+                            "(KeyframeSequence / CurveAnimation)."
+                        )
+                        if animation_note not in self.preview_details.text():
+                            self.preview_details.setText(
+                                self.preview_details.text() + "\n" + animation_note
+                            )
+                        return
 
                 from ..cache.rbxm_preview import RbxmPreviewWidget
 
