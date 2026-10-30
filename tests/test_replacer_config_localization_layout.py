@@ -104,17 +104,64 @@ def test_dashboard_restores_fleasion_workflows_and_separates_advanced_sql(
         assert window.tab_widget.currentWidget() is window._replacer_tab
         assert not hasattr(window, '_local_db_tab')
         assert not hasattr(window, '_proxy_traffic_tab')
-        assert [
-            window._replacer_modes.tabText(index)
-            for index in range(window._replacer_modes.count())
-        ] == ['Cache Hash', 'Asset ID (legacy)']
-        assert window._hash_replacer_tab.asset_store.root == config_dir / 'HashReplacer'
+        assert window._asset_id_replacer_tab is window._replacer_tab
+        assert not hasattr(window, '_replacer_modes')
+        assert not hasattr(window, '_hash_replacer_tab')
+        assert window._hash_replacer_store.root == config_dir / 'HashReplacer'
         assert window._rando_stuff_tab._hash_asset_store is window._hash_replacer_store
+        assert window._rando_stuff_tab._cache_store is window._scraper_db_tab.store
+        window._open_hash_replacer_dialog()
+        assert window._hash_replacer_tab.asset_store is window._hash_replacer_store
+        assert window._hash_replacer_tab.cache_store is window._scraper_db_tab.store
+        assert window._hash_replacer_dialog.isVisible()
         assert not hasattr(window, '_hidden_replacer_tab')
     finally:
         if window is not None:
             enabled_menu = getattr(window, 'enabled_menu', None)
             if enabled_menu is not None:
                 enabled_menu.hide()
+            window.close()
+        app.processEvents()
+
+
+
+def test_existing_asset_id_profiles_are_hidden_without_moving_or_rewriting_files(
+    tmp_path, monkeypatch
+):
+    app = _qapp()
+    config_dir = Path(tmp_path) / 'FleasionArchived'
+    configs_dir = config_dir / 'configs'
+    configs_dir.mkdir(parents=True)
+    archived_config = configs_dir / 'fallen.json'
+    original = (
+        b'{\r\n'
+        b'  "replacement_rules": [\r\n'
+        b'    {"name": "example", "replace_ids": [123], "mode": "local", '
+        b'"local_path": "D:/assets/example.obj"}\r\n'
+        b'  ]\r\n'
+        b'}\r\n'
+    )
+    archived_config.write_bytes(original)
+    monkeypatch.setattr(manager_module, 'CONFIG_DIR', config_dir)
+    monkeypatch.setattr(manager_module, 'CONFIG_FILE', config_dir / 'settings.json')
+    monkeypatch.setattr(manager_module, 'CONFIGS_FOLDER', configs_dir)
+
+    window = None
+    try:
+        manager = ConfigManager()
+        window = ReplacerConfigWindow(manager)
+        assert archived_config.read_bytes() == original
+        assert archived_config.exists()
+        assert 'fallen' in window._legacy_profile_names()
+        assert 'fallen' not in window._visible_replacer_config_names()
+        assert 'Default' in window._visible_replacer_config_names()
+        assert 'fallen' in window._rando_stuff_tab._legacy_config_combo.findData('fallen') * []
+        window.set_legacy_profiles_visible(True)
+        assert 'fallen' in window._visible_replacer_config_names()
+        window.set_legacy_profiles_visible(False)
+        assert 'fallen' not in window._visible_replacer_config_names()
+        assert archived_config.read_bytes() == original
+    finally:
+        if window is not None:
             window.close()
         app.processEvents()
