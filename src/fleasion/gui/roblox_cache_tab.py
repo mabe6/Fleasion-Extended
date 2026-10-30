@@ -791,6 +791,9 @@ class RobloxCacheTab(QWidget):
                 f'Cache hash: {cache_hash}\\nCopy it and paste it into Replacer → Cache Hash.',
             )
             return
+        # Keep the Replacer bound to the exact cache root selected in Scraper DB.
+        # This matters when the user browses a non-default Roblox cache location.
+        hash_tab.cache_store = self.store
         hash_tab.set_target_hash(cache_hash)
         tab_widget = getattr(window, 'tab_widget', None)
         if tab_widget is not None:
