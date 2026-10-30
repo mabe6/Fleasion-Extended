@@ -1316,7 +1316,11 @@ class RobloxCacheTab(QWidget):
         if cached.get('cdn_probe_note'):
             details.append(str(cached['cdn_probe_note']))
         if entry.url:
-            details.append(f'URL: {entry.url}')
+            parsed_url = urlsplit(entry.url)
+            safe_url = urlunsplit(
+                (parsed_url.scheme, parsed_url.netloc, parsed_url.path, '', '')
+            )
+            details.append(f'CDN resource: {safe_url}')
         self.preview_details.setText('\n'.join(details))
         if not self._preview_enabled:
             self.stop_preview_button.setVisible(False)
