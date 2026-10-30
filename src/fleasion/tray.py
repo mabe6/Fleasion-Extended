@@ -320,16 +320,16 @@ class SystemTray:
         cache_action.triggered.connect(self._show_delete_cache)
         self.menu.addAction(cache_action)
 
-        database_editor_action = QAction('SQLite Browser…', self.menu)
+        database_editor_action = QAction('Advanced SQL…', self.menu)
         database_editor_action.setToolTip(
-            'Browse local .db files, inspect tables and rows, and edit cells with backups'
+            'Inspect SQLite tables, schemas and SQL with verified backups'
         )
         database_editor_action.triggered.connect(self._show_sqlite_browser)
         self.menu.addAction(database_editor_action)
 
-        asset_explorer_action = QAction('Asset Explorer…', self.menu)
+        asset_explorer_action = QAction('Scraper DB…', self.menu)
         asset_explorer_action.setToolTip(
-            'Browse local Roblox cache entries, preview assets and replace or restore cache IDs'
+            'Browse the local Roblox cache, inspect asset metadata and preview stored assets'
         )
         asset_explorer_action.triggered.connect(self._show_asset_explorer)
         self.menu.addAction(asset_explorer_action)
@@ -1090,12 +1090,12 @@ class SystemTray:
             self._toggle_dashboard()
 
     def _show_sqlite_browser(self):
-        """Open the dashboard on the direct SQLite browser."""
+        """Open the dashboard on Advanced SQL."""
         self._show_replacer_config()
         window = self.dashboard_window
         if window is None:
             return
-        editor_tab = getattr(window, '_sqlite_browser_tab', None)
+        editor_tab = getattr(window, '_advanced_sql_tab', None) or getattr(window, '_sqlite_browser_tab', None)
         tab_widget = getattr(window, 'tab_widget', None)
         if editor_tab is None or tab_widget is None:
             return
@@ -1104,12 +1104,12 @@ class SystemTray:
             tab_widget.setCurrentIndex(tab_index)
 
     def _show_asset_explorer(self):
-        """Open the dashboard on the unified local asset explorer."""
+        """Open the dashboard on Scraper DB."""
         self._show_replacer_config()
         window = self.dashboard_window
         if window is None:
             return
-        cache_tab = getattr(window, '_asset_explorer_tab', None)
+        cache_tab = getattr(window, '_scraper_db_tab', None) or getattr(window, '_asset_explorer_tab', None)
         tab_widget = getattr(window, 'tab_widget', None)
         if cache_tab is None or tab_widget is None:
             return

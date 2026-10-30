@@ -360,7 +360,7 @@ class RobloxCacheTab(QWidget):
         )
         self._build_ui()
         if additional_tab is not None:
-            self.pages.addTab(additional_tab, 'SQLite Browser')
+            self.pages.addTab(additional_tab, 'Advanced SQL')
         self._render_active_swaps()
         app = QApplication.instance()
         if app is not None:
@@ -431,7 +431,7 @@ class RobloxCacheTab(QWidget):
         self.swaps_table.itemDoubleClicked.connect(self._load_selected_swap)
         active_layout.addWidget(self.swaps_table, 1)
         self.swap_empty_label = QLabel(
-            'No saved swaps yet. Use Asset Explorer to browse local entries, then choose a target and replacement ID.'
+            'No saved swaps yet. Use Scraper DB to browse local entries, then choose a target and replacement ID.'
         )
         self.swap_empty_label.setWordWrap(True)
         self.swap_empty_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -666,7 +666,7 @@ class RobloxCacheTab(QWidget):
         entries_layout.addWidget(self.output)
         self.set_probe_header_enabled(self._probe_header_enabled)
 
-        self.pages.addTab(self.entries_page, 'Asset Explorer')
+        self.pages.addTab(self.entries_page, 'Scraper DB')
 
         # In the dashboard these pages are promoted to sibling top-level tabs.
         # Keep the combined inner tab widget as the default for existing callers/tests.
@@ -683,12 +683,12 @@ class RobloxCacheTab(QWidget):
             # explicitly be shown, otherwise only the detached status label is visible.
             selected_page.setVisible(True)
             if self._view_mode == 'slots':
-                # Share the scan/operation status row with the standalone Asset Explorer view.
+                # Share the scan/operation status row with the standalone Scraper DB view.
                 self.status_label.setParent(self)
                 root.addWidget(self.status_label)
 
     def set_preview_enabled(self, enabled: bool) -> None:
-        """Show/hide the shared Asset Explorer preview pane."""
+        """Show/hide the shared Scraper DB preview pane."""
         self._preview_enabled = bool(enabled)
         if not self._preview_enabled:
             self.stop_preview_button.setVisible(False)
@@ -1537,7 +1537,7 @@ class RobloxCacheTab(QWidget):
                 self.swap_empty_label.setText('No swaps match the selected filters. Clear Search or choose All swaps.')
             else:
                 self.swap_empty_label.setText(
-                    'No saved swaps yet. Use Asset Explorer to browse every local entry, then choose a target and replacement ID.'
+                    'No saved swaps yet. Use Scraper DB to browse every local entry, then choose a target and replacement ID.'
                 )
 
     def refresh(self) -> None:
@@ -1674,7 +1674,7 @@ class RobloxCacheTab(QWidget):
                     name_cell.setToolTip(self._entry_name(entry))
 
     def _resolve_cache_names(self) -> None:
-        """Resolve cached names in the background and share the Asset Explorer cache."""
+        """Resolve cached names in the background and share the Scraper DB cache."""
         if self._view_mode != 'slots' or self._name_resolution_disabled:
             return
         settings = getattr(self.config_manager, 'settings', None)

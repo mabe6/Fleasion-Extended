@@ -80,7 +80,7 @@ class LocalDatabaseEditorWidget(QWidget):
         self.embedded = embedded
         self.config_manager = config_manager
         self.setWindowFlag(Qt.WindowType.Window, not embedded)
-        self.setWindowTitle("SQLite Browser — Fleasion Extended")
+        self.setWindowTitle("Advanced SQL — Fleasion Extended")
         self.resize(1180, 760)
         self.browser: SQLiteBrowser | None = None
         self.current_table = ""

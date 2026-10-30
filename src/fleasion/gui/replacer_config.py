@@ -746,56 +746,99 @@ class ReplacerConfigWindow(QDialog):
             self.setWindowIcon(QIcon(str(icon_path)))
 
     def _setup_ui(self):
-        """Build the local-first dashboard without tabs that require HTTP interception."""
+        """Build the Fleasion dashboard around the fork's local-first cache backend."""
         main_layout = QVBoxLayout()
         main_layout.setContentsMargins(0, 0, 0, 0)
 
         self.tab_widget = QTabWidget()
-        self._http_proxy_dependent_tabs: list[QWidget] = []
         self._registered_module_interceptors = []
 
-        # Legacy replacement widgets are kept off-screen because the existing
-        # refresh/undo model still references their controls. They are not exposed
-        # as a dashboard tab in this local-cache build.
-        self._hidden_replacer_tab = self._create_replacer_tab()
-
+        # Local DB remains a distinct, visible workflow. Its implementation uses
+        # the fork's local store and does not depend on the retired HTTP scraper.
         from .local_database_editor import LocalDatabaseEditorWidget
         from .roblox_cache_tab import RobloxCacheTab
 
-        # Keep swaps, the unified asset inventory and direct SQLite tools as
-        # separate top-level workflows. Asset Explorer owns cache discovery;
-        # SQLite Browser is intentionally advanced-only.
         self._roblox_cache_tab = RobloxCacheTab(
             self,
             config_manager=self.config_manager,
             view_mode='swaps',
         )
+        self._local_db_tab = self._roblox_cache_tab
+        self.tab_widget.addTab(self._local_db_tab, 'Local DB')
+
+        # Replacer stays a separate top-level screen, as in upstream Fleasion.
+        self._replacer_tab = self._create_replacer_tab()
+        self.tab_widget.addTab(
+            self._replacer_tab,
+            tr('ui.gui.replacer_config.replacer'),
+        )
+
+        # Scraper DB keeps the original workflow and label, but reads the
+        # local cache through RobloxCacheStore instead of the retired scraper.
         self._asset_explorer_tab = RobloxCacheTab(
             self,
             config_manager=self.config_manager,
             view_mode='slots',
         )
-        self._sqlite_browser_tab = LocalDatabaseEditorWidget(
-            self,
-            embedded=True,
-            config_manager=self.config_manager,
-        )
+        self._scraper_db_tab = self._asset_explorer_tab
+        self.tab_widget.addTab(self._scraper_db_tab, 'Scraper DB')
 
-        self.tab_widget.addTab(self._roblox_cache_tab, 'Swaps')
-        self.tab_widget.addTab(self._asset_explorer_tab, 'Asset Explorer')
-        self.tab_widget.addTab(self._sqlite_browser_tab, 'SQLite Browser')
+        if self._mod_manager is not None:
+            from .modifications_tab import ModificationsTab
 
-        # Keep only miscellaneous utilities that work without HTTP interception.
+            self._modifications_tab = ModificationsTab(
+                self._mod_manager,
+                self.roblox_monitor,
+                config_manager=self.config_manager,
+                proxy_master=self.proxy_master,
+                hotkey_controller=self._hotkey_controller,
+            )
+            self.tab_widget.addTab(
+                self._modifications_tab,
+                tr('ui.gui.replacer_config.modifications'),
+            )
+
         from .rando_stuff_tab import RandoStuffTab
+        from .subplace_joiner_tab import SubplaceJoinerTab
+        from .proxy_tab import ProxyTrafficTab
 
         self._rando_stuff_tab = RandoStuffTab(
             self,
             config_manager=self.config_manager,
             proxy_master=self.proxy_master,
         )
+
+        self._subplace_tab = SubplaceJoinerTab(
+            rando_tab=self._rando_stuff_tab,
+            config_manager=self.config_manager,
+            proxy_master=self.proxy_master,
+        )
+        self._rando_stuff_tab.selected_account_changed.connect(
+            self._subplace_tab.set_selected_account
+        )
+        self.tab_widget.addTab(
+            self._proxy_required(self._subplace_tab),
+            tr('ui.gui.replacer_config.subplace_joiner'),
+        )
+        if self.proxy_master is not None:
+            self.proxy_master.register_module_interceptor(self._subplace_tab)
+            self._registered_module_interceptors.append(self._subplace_tab)
+
         self.tab_widget.addTab(
             self._rando_stuff_tab,
             tr('ui.gui.replacer_config.miscellaneous'),
+        )
+        if self.proxy_master is not None:
+            self.proxy_master.register_module_interceptor(self._rando_stuff_tab)
+            self._registered_module_interceptors.append(self._rando_stuff_tab)
+
+        self._proxy_traffic_tab = ProxyTrafficTab(
+            config_manager=self.config_manager,
+            proxy_master=self.proxy_master,
+        )
+        self.tab_widget.addTab(
+            self._env_proxy_required(self._proxy_traffic_tab),
+            tr('ui.gui.replacer_config.proxy'),
         )
 
         from .settings_tab import SettingsTab
@@ -806,24 +849,41 @@ class ReplacerConfigWindow(QDialog):
             parent=self,
         )
         self._settings_tab.probe_header_visibility_changed.connect(
-            self._asset_explorer_tab.set_probe_header_enabled
+            self._scraper_db_tab.set_probe_header_enabled
         )
         self._settings_tab.asset_database_preview_visibility_changed.connect(
-            self._asset_explorer_tab.set_preview_enabled
+            self._scraper_db_tab.set_preview_enabled
         )
         self.tab_widget.addTab(
             self._settings_tab,
             tr('ui.gui.replacer_config.settings'),
         )
 
-        self.tab_widget.setCurrentWidget(self._roblox_cache_tab)
+        self._advanced_sql_tab = LocalDatabaseEditorWidget(
+            self,
+            embedded=True,
+            config_manager=self.config_manager,
+        )
+        self._sqlite_browser_tab = self._advanced_sql_tab
+        self.tab_widget.addTab(self._advanced_sql_tab, 'Advanced SQL')
+
+        self.tab_widget.setCurrentWidget(self._local_db_tab)
         main_layout.addWidget(self.tab_widget)
         self.setLayout(main_layout)
 
-        _sync_http_proxy_tab_visibility(self.tab_widget, self._http_proxy_dependent_tabs)
         self.set_proxy_features_enabled(self.config_manager.proxy_features_enabled)
 
+        # Restore the keyboard shortcuts used by the original Replacer UI.
         from PyQt6.QtGui import QKeySequence, QShortcut
+
+        undo_shortcut = QShortcut(QKeySequence('Ctrl+Z'), self)
+        undo_shortcut.activated.connect(self._do_undo)
+
+        delete_shortcut = QShortcut(QKeySequence('Delete'), self)
+        delete_shortcut.activated.connect(self._delete_selected)
+
+        redo_shortcut = QShortcut(QKeySequence('Ctrl+Y'), self)
+        redo_shortcut.activated.connect(self._do_redo)
 
         escape_shortcut = QShortcut(QKeySequence('Escape'), self)
         escape_shortcut.activated.connect(self.close)
