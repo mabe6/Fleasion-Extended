@@ -8,7 +8,7 @@ import sqlite3
 import time
 from pathlib import Path
 
-from PyQt6.QtCore import Qt, QTimer
+from PyQt6.QtCore import Qt, QThread, QTimer, pyqtSignal
 from PyQt6.QtGui import QImage, QPixmap
 from PyQt6.QtWidgets import (
     QApplication,
@@ -87,6 +87,39 @@ def _format_size(value: int | None) -> str:
     return str(value)
 
 
+
+class _CacheEntryPreviewWorker(QThread):
+    """Read and decode one cache entry after the user selects it."""
+
+    payload_ready = pyqtSignal(str, bytes, str)
+    preview_failed = pyqtSignal(str, str)
+
+    def __init__(self, entry_id: str, store: RobloxCacheStore, parent=None):
+        super().__init__(parent)
+        self.entry_id = entry_id
+        self.store = store
+
+    def run(self) -> None:
+        try:
+            if self.isInterruptionRequested():
+                return
+            data, _storage_mode = self.store._get_entry_data(self.entry_id)
+            _url, payload, _has_header = split_rbxh_entry(data)
+            del data
+            if self.isInterruptionRequested():
+                return
+            payload = decompress_roblox_payload(payload)
+            if self.isInterruptionRequested():
+                return
+            kind = detect_roblox_payload_kind(payload)
+            self.payload_ready.emit(self.entry_id, payload, kind)
+        except Exception as exc:
+            if not self.isInterruptionRequested():
+                self.preview_failed.emit(
+                    self.entry_id, f'{type(exc).__name__}: {exc}'
+                )
+
+
 class RobloxCacheTab(QWidget):
     """Browse local rbx-storage entries, replace a whole slot and restore originals."""
 
@@ -113,6 +146,7 @@ class RobloxCacheTab(QWidget):
         self._mesh_loader = None
         self._current_preview_image: QImage | None = None
         self._current_preview_request_id = ''
+        self._preview_workers: set[_CacheEntryPreviewWorker] = set()
         self._name_resolver = None
         self._name_resolution_attempted: set[str] = set()
         self._name_resolution_disabled = False
@@ -130,7 +164,7 @@ class RobloxCacheTab(QWidget):
         self._render_active_swaps()
         app = QApplication.instance()
         if app is not None:
-            app.aboutToQuit.connect(self._stop_name_resolver)
+            app.aboutToQuit.connect(self._shutdown_workers)
         if view_mode == 'slots' and callable(getattr(self.store, 'scan', None)):
             QTimer.singleShot(0, self.refresh)
 
@@ -736,6 +770,7 @@ class RobloxCacheTab(QWidget):
         setattr(self, attribute, None)
 
     def _reset_slot_preview(self) -> None:
+        self._current_preview_request_id = ''
         self._stop_slot_worker('_image_loader')
         self._stop_slot_worker('_mesh_loader')
         if self._animation_panel is not None:
@@ -764,18 +799,31 @@ class RobloxCacheTab(QWidget):
     def _load_slot_preview(self, entry: RobloxCacheEntry) -> None:
         self._reset_slot_preview()
         self._current_preview_request_id = entry.entry_id
+        self.preview_info.setText('Reading cache entry and decoding preview…')
+        self.preview_stack.setCurrentWidget(self.preview_info)
+        worker = _CacheEntryPreviewWorker(entry.entry_id, self.store, self)
+        self._preview_workers.add(worker)
+        worker.payload_ready.connect(self._on_slot_payload_ready)
+        worker.preview_failed.connect(self._on_slot_preview_error)
+        worker.finished.connect(
+            lambda current=worker: self._preview_workers.discard(current)
+        )
+        worker.finished.connect(worker.deleteLater)
+        worker.start()
+
+    def _on_slot_payload_ready(self, request_id: str, payload: bytes, kind: str) -> None:
+        if request_id != self._current_preview_request_id:
+            return
+        entry = self.entries_by_id.get(request_id)
+        if entry is None:
+            return
+        if entry.kind == 'compressed':
+            entry.kind = kind
+            self.preview_title.setText(f'{kind.upper()} · {entry.entry_id[:12]}')
+            self.preview_details.setText(
+                self.preview_details.text().replace('Type: compressed', f'Type: {kind}')
+            )
         try:
-            data, _storage_mode = self.store._get_entry_data(entry.entry_id)
-            _url, payload, _has_header = split_rbxh_entry(data)
-            # Payload decoding happens only after the user selects this entry.
-            # No arbitrary decompressed-size cap: the decoder works with the real payload.
-            payload = decompress_roblox_payload(payload)
-            kind = detect_roblox_payload_kind(payload)
-            if entry.kind == 'compressed':
-                self.preview_title.setText(f'{kind.upper()} · {entry.entry_id[:12]}')
-                self.preview_details.setText(
-                    self.preview_details.text().replace('Type: compressed', f'Type: {kind}')
-                )
             if kind in _IMAGE_KINDS:
                 from ..cache.cache_viewer import ImageLoaderThread
 
@@ -876,6 +924,7 @@ class RobloxCacheTab(QWidget):
         except Exception as exc:
             self.preview_info.setText(f'Preview failed: {type(exc).__name__}: {exc}')
             self.preview_stack.setCurrentWidget(self.preview_info)
+
 
     def _on_slot_image_ready(
         self, request_id: str, rgba: bytes, width: int, height: int
@@ -1111,6 +1160,15 @@ class RobloxCacheTab(QWidget):
         self._name_resolver = None
         if not self._name_resolution_disabled:
             QTimer.singleShot(100, self._resolve_cache_names)
+
+    def _shutdown_workers(self) -> None:
+        self._stop_name_resolver()
+        workers = tuple(self._preview_workers)
+        for worker in workers:
+            worker.requestInterruption()
+        for worker in workers:
+            worker.wait()
+        self._preview_workers.clear()
 
     def _stop_name_resolver(self) -> None:
         worker = self._name_resolver
