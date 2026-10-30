@@ -535,16 +535,17 @@ def format_asset_metadata_preview(
             lines.append(f"{label}: {value}")
 
     lines.append("")
-    encoding = str(metadata.get("cdn_content_encoding") or "").strip()
-    if not encoding and source_url:
-        query_encoding = parse_qs(urlparse(source_url).query).get('encoding', [''])[0]
-        encoding = str(query_encoding or '').strip()
+    response_encoding = str(metadata.get("cdn_content_encoding") or "").strip()
+    url_encoding = (
+        str(parse_qs(urlparse(source_url).query).get('encoding', [''])[0] or '').strip()
+        if source_url and not response_encoding else ''
+    )
     content_type = str(metadata.get("cdn_content_type") or "").strip()
     if content_type:
         lines.append(f"Response content type: {content_type}")
-    if encoding:
-        lines.append(f"Response content encoding: {encoding}")
-        lowered_encoding = encoding.casefold()
+    if response_encoding:
+        lines.append(f"Response content encoding: {response_encoding}")
+        lowered_encoding = response_encoding.casefold()
         if "dcz" in lowered_encoding:
             lines.append(
                 "Compression: Roblox DCZ / dictionary-based Zstandard. "
@@ -554,6 +555,12 @@ def format_asset_metadata_preview(
             lines.append("Compression: Zstandard (Zstd).")
         elif "gzip" in lowered_encoding:
             lines.append("Compression: GZip.")
+    elif url_encoding:
+        lines.append(f"CDN URL encoding parameter: {url_encoding}")
+        lines.append(
+            "This is the encoding requested in the URL, not proof that the stored bytes "
+            "are compressed. Fleasion checks the payload signature when opening the entry."
+        )
     for key, label in (
         ("cdn_content_length", "Compressed response size"),
         ("cdn_content_disposition", "Content disposition"),
