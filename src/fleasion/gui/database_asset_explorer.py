@@ -517,10 +517,21 @@ class DatabaseAssetExplorer(QWidget):
             if not isinstance(info, dict) or not info.get('name'):
                 continue
             result[str(asset_id)] = {
-                'name': str(info.get('name') or ''),
-                'creator_name': str(info.get('creator_name') or ''),
-                'created_at': str(info.get('created_at') or ''),
-                'updated_at': str(info.get('updated_at') or ''),
+                key: str(info.get(key) or '')
+                for key in (
+                    'name',
+                    'creator_name',
+                    'created_at',
+                    'updated_at',
+                    'description',
+                    'creator_type',
+                    'creator_id',
+                    'asset_type',
+                    'price',
+                    'price_status',
+                    'favorite_count',
+                    'source',
+                )
             }
         return result
 
@@ -551,6 +562,10 @@ class DatabaseAssetExplorer(QWidget):
         self.refresh_button = QPushButton('Refresh')
         self.refresh_button.clicked.connect(self.refresh)
         filters_layout.addWidget(self.refresh_button)
+
+        self.asset_lookup_button = QPushButton('Asset Lookup…')
+        self.asset_lookup_button.clicked.connect(self._open_asset_lookup)
+        filters_layout.addWidget(self.asset_lookup_button)
 
         self.stats_total_label = QLabel('0 assets')
         filters_layout.addWidget(self.stats_total_label)
@@ -1515,6 +1530,43 @@ class DatabaseAssetExplorer(QWidget):
         self.image_preview.clear()
         self.preview_stack.setCurrentWidget(self.info_preview)
 
+    def _open_asset_lookup(self) -> None:
+        from .asset_lookup_dialog import AssetLookupDialog
+
+        dialog = AssetLookupDialog(self, on_metadata=self._cache_lookup_metadata)
+        dialog.exec()
+
+    def _cache_lookup_metadata(self, asset_id: str, metadata: dict[str, str]) -> None:
+        cached = self._name_cache.setdefault(asset_id, {})
+        fields = (
+            'name',
+            'creator_name',
+            'created_at',
+            'updated_at',
+            'description',
+            'creator_type',
+            'creator_id',
+            'asset_type',
+            'price',
+            'price_status',
+            'favorite_count',
+            'source',
+        )
+        cached.update(
+            {
+                key: str(metadata.get(key) or cached.get(key) or '')
+                for key in fields
+            }
+        )
+        for item in self.items:
+            if item.asset_id == asset_id:
+                item.name = cached.get('name', '')
+                item.creator_name = cached.get('creator_name', '')
+                item.created_at = cached.get('created_at', '')
+                item.updated_at = cached.get('updated_at', '')
+        self._save_settings()
+        self._render_items()
+
     def _copy_selected_id(self) -> None:
         if self._current_entry_id:
             QApplication.clipboard().setText(self._current_entry_id)
@@ -1619,12 +1671,21 @@ class DatabaseAssetExplorer(QWidget):
             if not isinstance(metadata, dict) or not metadata.get('name'):
                 continue
             key = str(asset_id)
-            self._name_cache[key] = {
-                'name': str(metadata.get('name') or ''),
-                'creator_name': str(metadata.get('creator_name') or ''),
-                'created_at': str(metadata.get('created_at') or ''),
-                'updated_at': str(metadata.get('updated_at') or ''),
-            }
+            cached = self._name_cache.setdefault(key, {})
+            cached.update(
+                {
+                    'name': str(metadata.get('name') or cached.get('name') or ''),
+                    'creator_name': str(
+                        metadata.get('creator_name') or cached.get('creator_name') or ''
+                    ),
+                    'created_at': str(
+                        metadata.get('created_at') or cached.get('created_at') or ''
+                    ),
+                    'updated_at': str(
+                        metadata.get('updated_at') or cached.get('updated_at') or ''
+                    ),
+                }
+            )
             for item in self.items:
                 if item.asset_id == key:
                     item.name = self._name_cache[key]['name']
