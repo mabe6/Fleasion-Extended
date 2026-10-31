@@ -276,6 +276,56 @@ def test_scraper_db_page_navigation_does_not_snap_back_to_selected_row(
 
 
 
+
+def test_large_rbxm_preview_populates_tree_branches_lazily():
+    from fleasion.cache.rbxm_preview import (
+        PreviewDocument,
+        PreviewInstance,
+        RbxmPreviewWidget,
+    )
+
+    app = _qapp()
+    root = PreviewInstance("Folder", "RBX0")
+    children = [
+        PreviewInstance("Part", f"RBX{i}")
+        for i in range(1600)
+    ]
+    children[0].children = [
+        PreviewInstance("Attachment", "RBX-CHILD-1"),
+        PreviewInstance("Attachment", "RBX-CHILD-2"),
+    ]
+    root.children = children
+    instances = {"RBX0": root}
+    instances.update({child.referent: child for child in children})
+    instances.update({child.referent: child for child in children[0].children})
+    document = PreviewDocument(
+        roots=[root],
+        instances=instances,
+    )
+    widget = RbxmPreviewWidget()
+    try:
+        widget.load_document(document, asset_label="large-fixture", dirty=False)
+        assert widget._lazy_tree_enabled
+        assert widget.tree.topLevelItemCount() == 1
+
+        root_item = widget.tree.topLevelItem(0)
+        assert root_item.childCount() == 1
+        root_item.setExpanded(True)
+        app.processEvents()
+
+        assert root_item.childCount() == 1600
+        first_child = root_item.child(0)
+        assert first_child.text(0) == "Part"
+        assert first_child.childCount() == 1
+        first_child.setExpanded(True)
+        app.processEvents()
+        assert first_child.childCount() == 2
+    finally:
+        widget.close()
+        app.processEvents()
+
+
+
 def test_scraper_db_kind_filter_uses_grouped_multiselect_category_popup():
     from fleasion.cache.asset_type_filter import CategoryFilterPopup
 
