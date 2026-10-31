@@ -956,6 +956,15 @@ class ReplacerConfigWindow(QDialog):
         self._rebuild_editing_menu()
         self._rebuild_enabled_menu(sync_from_disk=False)
 
+    def _remember_hash_replacer_profile(self, name: str) -> None:
+        if not name:
+            return
+        settings = self.config_manager.settings
+        if settings.get('last_hash_replacer_profile') == name:
+            return
+        settings['last_hash_replacer_profile'] = name
+        self.config_manager.save()
+
     def _open_hash_replacer_dialog(self, target_hash: str = '') -> None:
         """Open the cache-hash editor as a separate utility, not as a Replacer tab."""
         dialog = getattr(self, '_hash_replacer_dialog', None)
@@ -970,6 +979,13 @@ class ReplacerConfigWindow(QDialog):
                 asset_store=self._hash_replacer_store,
                 cache_store=self._scraper_db_tab.store,
             )
+            self._hash_replacer_tab.profile_combo.currentTextChanged.connect(
+                self._remember_hash_replacer_profile
+            )
+            selected_profile = str(
+                self.config_manager.settings.get('last_hash_replacer_profile', 'Default')
+            )
+            self._hash_replacer_tab.refresh_profiles(selected_profile)
             self._hash_replacer_tab.cache_changed.connect(self._scraper_db_tab.refresh)
             layout = QVBoxLayout(dialog)
             layout.setContentsMargins(0, 0, 0, 0)
