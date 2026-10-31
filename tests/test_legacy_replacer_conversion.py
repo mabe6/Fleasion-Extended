@@ -21,14 +21,20 @@ class FakeCacheStore:
         return list(self.entries)
 
 
-def _entry(cache_hash: str, asset_id: str = "", kind: str = "mesh"):
+def _entry(
+    cache_hash: str,
+    asset_id: str = "",
+    kind: str = "mesh",
+    url: str = "https://assets.invalid/content",
+):
+
     return RobloxCacheEntry(
         entry_id=cache_hash,
         file_size=100,
         database_size=100,
         modified_at=1.0,
         kind=kind,
-        url="https://assets.invalid/content",
+        url=url,
         asset_id=asset_id,
         has_rbxh_header=True,
         storage_mode="database",
@@ -121,6 +127,42 @@ def test_legacy_conversion_uses_metadata_ids_when_url_has_no_asset_id(tmp_path: 
     rule = store.load_config(report["profile_name"])["rules"][0]
     assert rule["target_hash"] == target
     assert report["asset_ids_matched"] == 1
+
+
+
+def test_legacy_conversion_resolves_asset_id_via_cdn_hash(tmp_path: Path):
+    cdn_hash = "a1" * 16
+    target_hash = "b2" * 16
+    url = f"https://fts.rbxcdn.com/sc3/{cdn_hash}?encoding=zstd&version=1"
+    cache = FakeCacheStore([_entry(target_hash, "", "png", url=url)])
+    source = tmp_path / "replacement.png"
+    source.write_bytes(b"replacement image")
+    assets = HashReplacerStore(tmp_path / "HashReplacer")
+    resolved = []
+
+    def resolver(asset_id: str) -> str:
+        resolved.append(asset_id)
+        return cdn_hash
+
+    report = convert_legacy_replacer_profile(
+        "images",
+        [{
+            "name": "image",
+            "replace_ids": [777],
+            "mode": "local",
+            "local_path": str(source),
+        }],
+        cache_store=cache,
+        asset_store=assets,
+        cdn_hash_resolver=resolver,
+    )
+
+    rules = assets.load_config(report["profile_name"])["rules"]
+    assert resolved == ["777"]
+    assert rules[0]["target_hash"] == target_hash
+    assert report["asset_ids_matched"] == 1
+    assert report["asset_ids_resolved_by_cdn"] == 1
+
 
 
 def test_legacy_conversion_reports_missing_ids_without_writing_partial_profile(tmp_path: Path):
