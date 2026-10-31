@@ -880,26 +880,53 @@ class ReplacerConfigWindow(QDialog):
         escape_shortcut.activated.connect(self.close)
 
     def _initialize_legacy_profile_visibility(self) -> None:
-        """Hide profiles that existed before the hash-based migration was introduced.
-
-        Their JSON files and runtime enabled state are deliberately untouched.
-        They remain selectable for conversion in Miscellaneous.
-        """
+        """Archive old Asset-ID profiles while keeping a clean active Default."""
         settings = self.config_manager.settings
         key = 'hidden_legacy_replacer_configs'
+        hidden_value = settings.get(key, [])
+        hidden = {
+            str(name) for name in hidden_value
+        } if isinstance(hidden_value, list) else set()
+
+        # Earlier migration builds left Default visible. Preserve its rules so
+        # they remain available for conversion in Miscellaneous.
+        migration_key = 'legacy_default_replacer_archived_v1'
+        if not settings.get(migration_key, False):
+            if 'Default' in self.config_manager.config_names:
+                try:
+                    default_rules = self.config_manager.get_replacement_rules('Default')
+                except Exception:
+                    default_rules = []
+                if default_rules:
+                    archive_name = 'Legacy Default'
+                    suffix = 2
+                    while archive_name in self.config_manager.config_names:
+                        archive_name = f'Legacy Default ({suffix})'
+                        suffix += 1
+                    if self.config_manager.rename_config('Default', archive_name):
+                        hidden.add(archive_name)
+                        created = self.config_manager.create_config('Default')
+                        settings['last_config'] = 'Default'
+                        settings[migration_key] = bool(created)
+                    else:
+                        # Retry on a later launch if the old profile could not be archived.
+                        settings[migration_key] = False
+                else:
+                    settings[migration_key] = True
+
         if key not in settings:
             existing_names = self.config_manager.config_names
-            archived_names = [name for name in existing_names if name != 'Default']
-            # A folder containing only old profiles still needs a clean visible
-            # Default profile for newly created rules.
-            if archived_names and 'Default' not in existing_names:
-                self.config_manager.create_config('Default')
-                self.config_manager.refresh_config_names()
-            settings[key] = archived_names
+            hidden.update(name for name in existing_names if name != 'Default')
+
+        current_names = self.config_manager.config_names
+        settings[key] = [
+            name for name in current_names
+            if name in hidden and name != 'Default'
+        ]
         settings.setdefault('show_legacy_replacer_configs', False)
         if (
             not settings.get('show_legacy_replacer_configs', False)
-            and settings.get('last_config', 'Default') in set(settings.get(key, []))
+            and settings.get('last_config', 'Default') in set(settings[key])
         ):
             settings['last_config'] = 'Default'
         self.config_manager.save()
