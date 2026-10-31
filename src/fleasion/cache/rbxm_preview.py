@@ -314,9 +314,16 @@ class RbxmPreviewWidget(QWidget):
     def parse_document_bytes(data: bytes) -> PreviewDocument:
         """Parse Roblox model bytes into UI-independent document data."""
         data = _decompress_if_needed(data)
-        if data.startswith(b'<roblox!'):
-            return RbxmPreviewWidget._load_binary(data)
-        if data.lstrip().startswith(b'<roblox'):
+        stripped = data.lstrip(b'\\xef\\xbb\\xbf \\t\\r\\n')
+        if stripped.startswith(b'<roblox!'):
+            return RbxmPreviewWidget._load_binary(stripped)
+        if (
+            stripped.startswith(b'<roblox')
+            or (
+                stripped.startswith(b'<?xml')
+                and b'<roblox' in stripped[:2048]
+            )
+        ):
             return RbxmPreviewWidget._load_xml(data)
         raise ValueError('Data is not an RBXM/RBXMX document')
 
