@@ -355,6 +355,14 @@ class RbxmPreviewWidget(QWidget):
         self._asset_label = ''
 
     def tree_expand_all(self):
+        if self._lazy_tree_enabled:
+            # Expanding every descendant at once defeats lazy loading on large models.
+            for index in range(self.tree.topLevelItemCount()):
+                self.tree.topLevelItem(index).setExpanded(True)
+            self.expand_btn.setToolTip(
+                'Large model: expand individual branches to load deeper levels'
+            )
+            return
         self.tree.expandAll()
 
     def tree_collapse_all(self):
