@@ -215,6 +215,67 @@ def test_scraper_db_sort_cycles_all_columns_and_restores_source_order(monkeypatc
 
 
 
+
+def test_scraper_db_page_navigation_does_not_snap_back_to_selected_row(
+    monkeypatch, tmp_path
+):
+    app = _qapp()
+
+    class FakeStore:
+        def __init__(self, *_args, **_kwargs):
+            self.root = tmp_path
+
+        def _manifest(self):
+            return {}
+
+        def swap_status(self, _entry_id):
+            return ''
+
+    monkeypatch.setattr(cache_tab_module, "RobloxCacheStore", FakeStore)
+    widget = cache_tab_module.RobloxCacheTab(
+        config_manager=SimpleNamespace(settings={}),
+        view_mode='slots',
+    )
+    try:
+        entries = [
+            RobloxCacheEntry(
+                entry_id=f'{index:032x}',
+                file_size=1,
+                database_size=1,
+                modified_at=float(index),
+                kind='rbxm',
+                url=f'https://assets.invalid/{index}',
+                asset_id=str(index + 1),
+                has_rbxh_header=False,
+                swap_status='',
+                storage_mode='database',
+            )
+            for index in range(600)
+        ]
+        widget.entries = entries
+        widget.entries_by_id = {entry.entry_id: entry for entry in entries}
+        widget._render_entries()
+        assert widget.table.rowCount() == 250
+
+        widget.table.selectRow(0)
+        widget.entries_next_button.click()
+        app.processEvents()
+
+        assert widget._entries_page_offset == 250
+        assert widget.table.rowCount() == 250
+        assert widget.table.item(0, 0).text() == entries[250].entry_id
+        assert widget._selected_entry_id() == ''
+
+        widget.entries_prev_button.click()
+        app.processEvents()
+        assert widget._entries_page_offset == 0
+        assert widget.table.item(0, 0).text() == entries[0].entry_id
+    finally:
+        widget.close()
+        app.processEvents()
+
+
+
 def test_scraper_db_kind_filter_uses_grouped_multiselect_category_popup():
     from fleasion.cache.asset_type_filter import CategoryFilterPopup
 
