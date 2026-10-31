@@ -1491,11 +1491,20 @@ class RandoStuffTab(QWidget):
         finally:
             self._legacy_convert_button.setEnabled(True)
 
+        profile_name = str(report['profile_name'])
+        self._config.settings['last_hash_replacer_profile'] = profile_name
+        self._config.save()
+        window = self.window()
+        hash_tab = getattr(window, '_hash_replacer_tab', None)
+        if hash_tab is not None:
+            hash_tab.refresh_profiles(profile_name)
+
         skipped = report.get("skipped", [])
         message = (
             f"Created Asset Hash profile '{report['profile_name']}' with "
             f"{report['rules_created']} rule(s). Matched "
-            f"{report['asset_ids_matched']}/{report['asset_ids_requested']} Asset ID(s). "
+            f"{report['asset_ids_matched']}/{report['asset_ids_requested']} Asset ID(s), "
+            f"{report.get('asset_ids_resolved_by_cdn', 0)} resolved via Asset Delivery. "
             "The original JSON was not changed."
         )
         if skipped:
