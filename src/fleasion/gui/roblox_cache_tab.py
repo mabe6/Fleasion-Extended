@@ -1124,11 +1124,25 @@ class RobloxCacheTab(QWidget):
     def _entry_page_size(self) -> int:
         return int(self.entries_page_size_combo.currentData() or 250)
 
+    def _clear_selection_for_page_navigation(self) -> None:
+        """Clear the selected row before changing pages."""
+        blocked = self.table.blockSignals(True)
+        self.table.clearSelection()
+        self.table.setCurrentCell(-1, -1)
+        self.table.blockSignals(blocked)
+        self._selection_changed()
+
     def _previous_entries_page(self) -> None:
+        if self._entries_page_offset <= 0:
+            return
+        self._clear_selection_for_page_navigation()
         self._entries_page_offset = max(0, self._entries_page_offset - self._entry_page_size())
         self._render_entries()
 
     def _next_entries_page(self) -> None:
+        if self._entries_page_offset + self._entry_page_size() >= len(self._visible_entries()):
+            return
+        self._clear_selection_for_page_navigation()
         self._entries_page_offset += self._entry_page_size()
         self._render_entries()
 
