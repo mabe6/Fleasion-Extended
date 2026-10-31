@@ -110,9 +110,19 @@ def test_dashboard_restores_fleasion_workflows_and_separates_advanced_sql(
         assert window._hash_replacer_store.root == config_dir / 'HashReplacer'
         assert window._rando_stuff_tab._hash_asset_store is window._hash_replacer_store
         assert window._rando_stuff_tab._cache_store is window._scraper_db_tab.store
+        assert window._hash_replacer_store.create_config('Migrated Default')
+        window.config_manager.settings['last_hash_replacer_profile'] = 'Migrated Default'
+        window.config_manager.save()
         window.show()
         app.processEvents()
         window._open_hash_replacer_dialog()
+        assert window._hash_replacer_tab.profile_combo.currentText() == 'Migrated Default'
+        window._hash_replacer_tab.profile_combo.setCurrentText('Default')
+        app.processEvents()
+        assert window.config_manager.settings['last_hash_replacer_profile'] == 'Default'
+        window._hash_replacer_tab.profile_combo.setCurrentText('Migrated Default')
+        app.processEvents()
+        assert window.config_manager.settings['last_hash_replacer_profile'] == 'Migrated Default'
         assert window._hash_replacer_tab.asset_store is window._hash_replacer_store
         assert window._hash_replacer_tab.cache_store is window._scraper_db_tab.store
         assert window._hash_replacer_dialog.isVisible()
