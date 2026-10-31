@@ -192,9 +192,9 @@ class RbxmPreviewWidget(QWidget):
         self.next_btn.clicked.connect(self._next_match)
         toolbar.addWidget(self.next_btn)
 
-        expand_btn = QPushButton(tr('ui.cache.rbxm_preview.expand_all'))
-        expand_btn.clicked.connect(self.tree_expand_all)
-        toolbar.addWidget(expand_btn)
+        self.expand_btn = QPushButton(tr('ui.cache.rbxm_preview.expand_all'))
+        self.expand_btn.clicked.connect(self.tree_expand_all)
+        toolbar.addWidget(self.expand_btn)
 
         collapse_btn = QPushButton(tr('ui.cache.rbxm_preview.collapse_all'))
         collapse_btn.clicked.connect(self.tree_collapse_all)
