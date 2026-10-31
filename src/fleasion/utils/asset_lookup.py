@@ -818,6 +818,60 @@ def _get_asset_response(
     )
 
 
+
+def resolve_asset_cdn_hash(
+    value: str,
+    *,
+    session: requests.Session | None = None,
+) -> str:
+    """Resolve a numeric Asset ID to its Roblox CDN content hash."""
+    asset_id = normalize_asset_id(value)
+    client = session or _new_session()
+    owns_session = session is None
+    response: requests.Response | None = None
+    try:
+        response = _get_asset_response(
+            client,
+            _ASSET_DELIVERY_URL.format(asset_id=asset_id),
+            {'User-Agent': _USER_AGENT},
+        )
+        if response.status_code in {401, 403}:
+            raise AssetLookupError(
+                f'Roblox denied Asset Delivery access to asset {asset_id}; '
+                'it may be private or restricted.'
+            )
+        response.raise_for_status()
+        location = _extract_asset_location(response) or str(response.url or '')
+        if not _trusted_asset_url(location):
+            raise AssetLookupError(
+                f'Asset Delivery did not return a trusted Roblox CDN location for asset {asset_id}.'
+            )
+        match = _CDN_HASH_RE.search(location)
+        if not match:
+            raise AssetLookupError(
+                f'Asset Delivery returned no cache content hash for asset {asset_id}.'
+            )
+        return match.group(1).casefold()
+    except AssetLookupError:
+        raise
+    except requests.RequestException as exc:
+        status = getattr(getattr(exc, 'response', None), 'status_code', None)
+        if status in {401, 403}:
+            raise AssetLookupError(
+                f'Roblox denied Asset Delivery access to asset {asset_id}; '
+                'it may be private or restricted.'
+            ) from exc
+        raise AssetLookupError(
+            f'Could not resolve Asset ID {asset_id} through Roblox Asset Delivery: '
+            f'{type(exc).__name__}: {exc}'
+        ) from exc
+    finally:
+        if response is not None:
+            response.close()
+        if owns_session:
+            client.close()
+
+
 def _stream_response_to_file(
     response: requests.Response,
     target: Path,
