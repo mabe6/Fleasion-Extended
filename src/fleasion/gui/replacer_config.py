@@ -914,6 +914,13 @@ class ReplacerConfigWindow(QDialog):
                 else:
                     settings[migration_key] = True
 
+        # An upgraded installation may contain only legacy JSON files and no
+        # active Default profile. Keep one visible destination profile so the
+        # hidden-profile fallback can never expose a legacy profile again.
+        if 'Default' not in self.config_manager.config_names:
+            self.config_manager.create_config('Default')
+            settings['last_config'] = 'Default'
+
         visibility_marker = 'legacy_replacer_visibility_initialized_v1'
         if not settings.get(visibility_marker, False):
             # ConfigManager may already provide an empty default list for this
