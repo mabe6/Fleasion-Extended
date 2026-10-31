@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from ..config.manager import resolve_local_replacement_path
 from .hash_replacer_store import HashReplacerError, HashReplacerStore
@@ -49,23 +49,41 @@ def _numeric_ids(value: Any) -> list[str]:
 def _cache_hashes_by_asset_id(
     entries: list[RobloxCacheEntry],
     cached_metadata: dict[str, Any] | None,
+    resolved_cdn_hashes: dict[str, str] | None = None,
 ) -> dict[str, list[RobloxCacheEntry]]:
-    """Index actual content slots by IDs found in their URL or saved metadata lookup."""
+    """Index cache slots by Asset IDs or resolved Roblox CDN hashes."""
     metadata = cached_metadata if isinstance(cached_metadata, dict) else {}
     result: dict[str, list[RobloxCacheEntry]] = {}
+    by_cdn_hash: dict[str, list[RobloxCacheEntry]] = {}
+
     for entry in entries:
         if entry.kind in _UNSUPPORTED_TARGET_KINDS:
             continue
+        try:
+            HashReplacerStore.validate_cache_hash(entry.entry_id)
+        except HashReplacerError:
+            continue
+
         slot_metadata = metadata.get(entry.entry_id, {})
         slot_metadata = slot_metadata if isinstance(slot_metadata, dict) else {}
         asset_id = str(entry.asset_id or slot_metadata.get("asset_id") or "").strip()
-        if not re.fullmatch(r"[1-9][0-9]{0,19}", asset_id):
-            continue
-        try:
-            cache_hash = HashReplacerStore.validate_cache_hash(entry.entry_id)
-        except HashReplacerError:
-            continue
-        result.setdefault(asset_id, []).append(entry)
+        if re.fullmatch(r"[1-9][0-9]{0,19}", asset_id):
+            result.setdefault(asset_id, []).append(entry)
+
+        match = re.search(
+            r"/(?:v[0-9]+/)?sc[0-9]+/([0-9a-f]{32})(?:[/?]|$)",
+            str(entry.url or ""),
+            re.IGNORECASE,
+        )
+        if match:
+            by_cdn_hash.setdefault(match.group(1).casefold(), []).append(entry)
+
+    for asset_id, cdn_hash in (resolved_cdn_hashes or {}).items():
+        normalized_hash = str(cdn_hash or "").casefold()
+        for entry in by_cdn_hash.get(normalized_hash, []):
+            matches = result.setdefault(str(asset_id), [])
+            if all(existing.entry_id != entry.entry_id for existing in matches):
+                matches.append(entry)
     return result
 
 
@@ -94,6 +112,7 @@ def convert_legacy_replacer_profile(
     cache_store: RobloxCacheStore,
     asset_store: HashReplacerStore,
     cached_metadata: dict[str, Any] | None = None,
+    cdn_hash_resolver: Callable[[str], str] | None = None,
 ) -> dict[str, Any]:
     """Create a new hash profile from a legacy Asset-ID profile.
 
@@ -106,14 +125,36 @@ def convert_legacy_replacer_profile(
         raise HashReplacerError("The selected legacy profile does not contain a rules list.")
 
     entries = cache_store.scan()
+    rules_to_convert = list(_iter_rules(rules))
+    requested_asset_ids = {
+        asset_id
+        for rule in rules_to_convert
+        for asset_id in _numeric_ids(rule.get("replace_ids", []))
+    }
     by_asset_id = _cache_hashes_by_asset_id(entries, cached_metadata)
+    resolved_cdn_hashes: dict[str, str] = {}
+    resolution_errors: dict[str, str] = {}
+    if cdn_hash_resolver is not None:
+        for asset_id in sorted(requested_asset_ids):
+            if by_asset_id.get(asset_id):
+                continue
+            try:
+                resolved_cdn_hashes[asset_id] = str(
+                    cdn_hash_resolver(asset_id)
+                ).casefold()
+            except Exception as exc:
+                resolution_errors[asset_id] = f"{type(exc).__name__}: {exc}"
+        if resolved_cdn_hashes:
+            by_asset_id = _cache_hashes_by_asset_id(
+                entries, cached_metadata, resolved_cdn_hashes
+            )
     imported_by_source: dict[str, str] = {}
     imported_asset_ids: dict[str, str] = {}
     converted_rules: dict[str, dict[str, Any]] = {}
     skipped: list[str] = []
     matched_asset_ids: set[str] = set()
 
-    for rule in _iter_rules(rules):
+    for rule in rules_to_convert:
         label = str(rule.get("name") or "Unnamed rule")
         mode = str(rule.get("mode") or ("remove" if rule.get("remove") else "id")).casefold()
         target_ids = _numeric_ids(rule.get("replace_ids", []))
@@ -131,8 +172,19 @@ def convert_legacy_replacer_profile(
             else:
                 missing_ids.append(asset_id)
         if missing_ids:
+            missing_details = []
+            for asset_id in missing_ids[:8]:
+                detail = asset_id
+                if asset_id in resolution_errors:
+                    detail += f" (Asset Delivery lookup failed: {resolution_errors[asset_id]})"
+                elif asset_id in resolved_cdn_hashes:
+                    detail += (
+                        f" (CDN hash {resolved_cdn_hashes[asset_id]} is not present "
+                        "in this Scraper DB)"
+                    )
+                missing_details.append(detail)
             skipped.append(
-                f"{label}: no local cache slot found for Asset ID(s) {', '.join(missing_ids[:8])}"
+                f"{label}: no local cache slot found for Asset ID(s) {', '.join(missing_details)}"
                 + (f" and {len(missing_ids) - 8} more" if len(missing_ids) > 8 else "")
             )
         if not targets:
@@ -192,8 +244,9 @@ def convert_legacy_replacer_profile(
 
     if not converted_rules:
         raise HashReplacerError(
-            "No rules could be converted. Check that the Asset IDs exist in the selected "
-            "Roblox cache and that the replacement files are available."
+            "No rules could be converted. Scraper DB stores CDN content hashes, not reversible "
+            "numeric Asset IDs. Asset Delivery could not match the selected IDs to entries in "
+            "this cache. Confirm the assets are accessible and already present in this Scraper DB."
         )
 
     profile_name = _unique_profile_name(asset_store, name)
@@ -202,10 +255,7 @@ def convert_legacy_replacer_profile(
         "profile_name": profile_name,
         "rules_created": len(converted_rules),
         "asset_ids_matched": len(matched_asset_ids),
-        "asset_ids_requested": len({
-            asset_id
-            for rule in _iter_rules(rules)
-            for asset_id in _numeric_ids(rule.get("replace_ids", []))
-        }),
+        "asset_ids_requested": len(requested_asset_ids),
+        "asset_ids_resolved_by_cdn": len(resolved_cdn_hashes),
         "skipped": skipped,
     }
