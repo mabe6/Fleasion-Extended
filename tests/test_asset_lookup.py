@@ -15,6 +15,7 @@ from fleasion.utils.asset_lookup import (
     format_asset_metadata_preview,
     lookup_asset_metadata,
     normalize_asset_id,
+    resolve_asset_cdn_hash,
 )
 
 
@@ -134,6 +135,36 @@ def test_lookup_reports_when_roblox_has_no_public_metadata() -> None:
     )
     with pytest.raises(AssetLookupError, match='did not return public metadata'):
         lookup_asset_metadata('12345', session=cast(requests.Session, session))
+
+
+
+def test_resolve_asset_cdn_hash_reads_asset_delivery_location() -> None:
+    cdn_hash = "c3" * 16
+    response = _FakeResponse(
+        {"locations": [{"location": f"https://fts.rbxcdn.com/sc7/{cdn_hash}?token=temp"}]},
+        headers={"Content-Type": "application/json", "Content-Length": "120"},
+    )
+    session = _FakeSession(get_responses=[response], post_response=_FakeResponse())
+
+    result = resolve_asset_cdn_hash("12345", session=cast(requests.Session, session))
+
+    assert result == cdn_hash
+    assert response.closed
+    assert session.get_calls[0][0].endswith("/v2/assetId/12345")
+    assert session.get_calls[0][1]["stream"] is True
+
+
+def test_resolve_asset_cdn_hash_rejects_untrusted_location() -> None:
+    response = _FakeResponse(
+        {"locations": [{"location": "https://example.invalid/sc7/" + "d4" * 16}]},
+        headers={"Content-Type": "application/json", "Content-Length": "120"},
+    )
+    session = _FakeSession(get_responses=[response], post_response=_FakeResponse())
+
+    with pytest.raises(AssetLookupError, match="trusted Roblox CDN"):
+        resolve_asset_cdn_hash("12345", session=cast(requests.Session, session))
+    assert response.closed
+
 
 
 def test_download_streams_original_bytes_and_returns_sha256(tmp_path: Path) -> None:
