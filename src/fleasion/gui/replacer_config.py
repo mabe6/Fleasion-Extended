@@ -917,6 +917,9 @@ class ReplacerConfigWindow(QDialog):
         if key not in settings:
             existing_names = self.config_manager.config_names
             hidden.update(name for name in existing_names if name != 'Default')
+            settings['show_legacy_replacer_configs'] = False
+        else:
+            settings.setdefault('show_legacy_replacer_configs', False)
 
         current_names = self.config_manager.config_names
         settings[key] = [
