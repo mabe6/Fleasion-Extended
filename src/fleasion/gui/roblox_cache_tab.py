@@ -172,7 +172,7 @@ class _CacheScanWorker(QThread):
 class _CacheEntryPreviewWorker(QThread):
     """Read and decode one cache entry after the user selects it."""
 
-    payload_ready = pyqtSignal(str, bytes, str)
+    payload_ready = pyqtSignal(str, bytes, str, object)
     preview_failed = pyqtSignal(str, str)
 
     def __init__(self, entry_id: str, store: RobloxCacheStore, parent=None):
@@ -191,8 +191,7 @@ class _CacheEntryPreviewWorker(QThread):
                 if self.isInterruptionRequested():
                     return
                 lower_url = source_url.casefold().split("?", 1)[0]
-                # DCZ/settings-compressed payloads use Roblox's Zstandard
-                # dictionary. Do not try to decode them with an empty dictionary.
+                # DCZ/settings-compressed payloads use Roblox's Zstandard dictionary.
                 dictionary_compressed = (
                     lower_url.endswith(".dcz")
                     or "settings-compressed/" in lower_url
@@ -206,33 +205,61 @@ class _CacheEntryPreviewWorker(QThread):
                 if self.isInterruptionRequested():
                     return
                 payload = decoded_path.read_bytes()
-                # Use the complete selected payload for deep RBXM/XML
-                # classification. Compressed INST chunks may not expose their
-                # class names in the first few kilobytes.
-                kind = detect_roblox_payload_kind(payload, url=source_url)
                 response_asset = extract_cached_http_response_asset_payload(
                     payload, url=source_url
                 )
                 if response_asset is not None:
-                    payload, kind, _response_headers = response_asset
+                    payload, _response_kind, _response_headers = response_asset
+
+                document = None
+                binary_model = payload.startswith(b'<roblox!')
+                xml_prefix = payload.lstrip(b'\\xef\\xbb\\xbf \\t\\r\\n')
+                xml_model = (
+                    xml_prefix.startswith(b'<roblox')
+                    or (
+                        xml_prefix.startswith(b'<?xml')
+                        and b'<roblox' in xml_prefix[:2048]
+                    )
+                ) and b'<Item' in payload
+
+                if binary_model or xml_model:
+                    try:
+                        from ..cache.rbxm_preview import RbxmPreviewWidget
+
+                        document = RbxmPreviewWidget.parse_document_bytes(payload)
+                        classes = {
+                            instance.class_name
+                            for instance in document.instances.values()
+                        }
+                        if 'CurveAnimation' in classes:
+                            kind = 'curve-anim'
+                        elif (
+                            'KeyframeSequence' in classes
+                            or {'Keyframe', 'Pose'} <= classes
+                        ):
+                            kind = 'anim'
+                        else:
+                            kind = 'rbxm' if binary_model else 'xml'
+                    except Exception:
+                        # Never retry an expensive model parse on the GUI thread.
+                        kind = 'rbxm' if binary_model else 'xml'
+                        document = None
+                else:
+                    kind = detect_roblox_payload_kind(payload, url=source_url)
+
                 if kind == 'mesh':
                     from ..cache.mesh_processing import is_mesh_data
 
                     if not is_mesh_data(payload):
                         kind = 'other'
-                if kind == 'xml' and b'CurveAnimation' in payload:
-                    kind = 'curve-anim'
-                elif kind == 'xml' and b'KeyframeSequence' in payload:
-                    kind = 'anim'
                 if self.isInterruptionRequested():
                     return
-                self.payload_ready.emit(self.entry_id, payload, kind)
+                self.payload_ready.emit(self.entry_id, payload, kind, document)
         except Exception as exc:
             if not self.isInterruptionRequested():
                 self.preview_failed.emit(
                     self.entry_id, f'{type(exc).__name__}: {exc}'
                 )
-
 
 class RobloxCacheTab(QWidget):
     """Browse local rbx-storage entries, replace a whole slot and restore originals."""
@@ -1471,7 +1498,9 @@ class RobloxCacheTab(QWidget):
         worker.finished.connect(worker.deleteLater)
         worker.start()
 
-    def _on_slot_payload_ready(self, request_id: str, payload: bytes, kind: str) -> None:
+    def _on_slot_payload_ready(
+        self, request_id: str, payload: bytes, kind: str, document: object | None = None
+    ) -> None:
         if request_id != self._current_preview_request_id:
             return
         entry = self.entries_by_id.get(request_id)
@@ -1609,27 +1638,7 @@ class RobloxCacheTab(QWidget):
                 font_layout.addWidget(FontViewerWidget(payload, self._font_panel))
                 self.preview_stack.addWidget(self._font_panel)
                 self.preview_stack.setCurrentWidget(self._font_panel)
-            elif kind in {'anim', 'curve-anim'}:
-                from ..cache.animation_viewer import AnimationViewerPanel
-
-                if self._animation_panel is None:
-                    self._animation_panel = AnimationViewerPanel(config_manager=self.config_manager)
-                    self.preview_stack.addWidget(self._animation_panel)
-                if self._animation_panel.load_animation(payload):
-                    self.preview_stack.setCurrentWidget(self._animation_panel)
-                else:
-                    self.preview_info.setText(
-                        'Animation detected, but no playable keyframes could be loaded.'
-                    )
-                    self.preview_stack.setCurrentWidget(self.preview_info)
-            elif kind in {'rbxm', 'xml'} and (
-                payload.startswith(b'<roblox!')
-                or payload.lstrip().startswith(b'<roblox')
-                or (
-                    payload.lstrip().startswith(b'<?xml')
-                    and b'<roblox' in payload[:2048]
-                )
-            ):
+            elif document is not None and kind in {'anim', 'curve-anim', 'rbxm', 'xml'}:
                 from ..cache.rbxm_preview import RbxmPreviewWidget
 
                 if self._model_panel is None:
@@ -1647,18 +1656,18 @@ class RobloxCacheTab(QWidget):
                     self._model_panel.add_child_btn.setEnabled(False)
                     self._model_panel.add_property_btn.setEnabled(False)
                     self.preview_stack.addWidget(self._model_panel)
-                self._model_panel.load_bytes(payload, entry.asset_id or entry.entry_id[:12])
-                # The document parser has already decompressed and decoded RBXM
-                # chunks here. Only a root AnimationClip is a standalone clip;
-                # nested clips inside a Folder/Model stay in the hierarchy preview.
-                root_classes = {
-                    root.class_name
-                    for root in (
-                        self._model_panel.document.roots
-                        if self._model_panel.document is not None else []
-                    )
-                }
-                if root_classes.intersection({'KeyframeSequence', 'CurveAnimation'}):
+
+                # Decompression and document parsing have already finished in the worker.
+                self._model_panel.load_document(
+                    document,
+                    entry.asset_id or entry.entry_id[:12],
+                    dirty=False,
+                )
+                root_classes = {root.class_name for root in document.roots}
+                has_root_animation = bool(
+                    root_classes.intersection({'KeyframeSequence', 'CurveAnimation'})
+                )
+                if has_root_animation and len(payload) <= 4 * 1024 * 1024:
                     from ..cache.animation_viewer import AnimationViewerPanel
 
                     if self._animation_panel is None:
@@ -1687,6 +1696,12 @@ class RobloxCacheTab(QWidget):
                                 self.preview_details.text() + "\n" + animation_note
                             )
                         return
+                elif has_root_animation:
+                    self.preview_details.setText(
+                        self.preview_details.text()
+                        + "\nLarge animation payload: structure is available; playback is skipped "
+                        "to keep the dashboard responsive."
+                    )
 
                 model_note = (
                     "Model contents: object hierarchy and properties. "
@@ -1695,47 +1710,72 @@ class RobloxCacheTab(QWidget):
                 if model_note not in self.preview_details.text():
                     self.preview_details.setText(self.preview_details.text() + "\n" + model_note)
                 model_name = (
-                    self._model_panel.document.roots[0].name.strip()
-                    if self._model_panel.document and self._model_panel.document.roots
-                    else ''
+                    document.roots[0].name.strip()
+                    if document.roots else ''
                 )
-                animation_paths = self._model_panel.animation_paths()
                 generic_names = {'folder', 'model', 'workspace', 'datamodel', 'instance'}
                 meaningful_model_name = (
                     model_name if model_name and model_name.casefold() not in generic_names else ''
                 )
                 if meaningful_model_name:
-                    metadata = {'name': meaningful_model_name}
-                    self._save_cache_metadata(entry.entry_id, metadata)
+                    self._save_cache_metadata(entry.entry_id, {'name': meaningful_model_name})
                     self.preview_title.setText(meaningful_model_name)
-                if animation_paths:
-                    self._save_cache_metadata(
-                        entry.entry_id,
-                        {'contained_animations': ' | '.join(animation_paths)},
-                    )
-                    shown_paths = animation_paths[:40]
-                    suffix = (
-                        f'\n… and {len(animation_paths) - len(shown_paths)} more'
-                        if len(animation_paths) > len(shown_paths) else ''
-                    )
-                    self.preview_details.setText(
-                        self.preview_details.text()
-                        + '\nAnimations in model:\n• ' + '\n• '.join(shown_paths) + suffix
-                    )
+
+                if len(payload) <= 4 * 1024 * 1024:
+                    animation_paths = self._model_panel.animation_paths()
+                    if animation_paths:
+                        self._save_cache_metadata(
+                            entry.entry_id,
+                            {'contained_animations': ' | '.join(animation_paths)},
+                        )
+                        shown_paths = animation_paths[:40]
+                        suffix = (
+                            f'\n… and {len(animation_paths) - len(shown_paths)} more'
+                            if len(animation_paths) > len(shown_paths) else ''
+                        )
+                        self.preview_details.setText(
+                            self.preview_details.text()
+                            + '\nAnimations in model:\n• ' + '\n• '.join(shown_paths) + suffix
+                        )
                 self.preview_stack.setCurrentWidget(self._model_panel)
+            elif kind in {'anim', 'curve-anim'} and len(payload) <= 4 * 1024 * 1024:
+                from ..cache.animation_viewer import AnimationViewerPanel
+
+                if self._animation_panel is None:
+                    self._animation_panel = AnimationViewerPanel(config_manager=self.config_manager)
+                    self.preview_stack.addWidget(self._animation_panel)
+                if self._animation_panel.load_animation(payload):
+                    self.preview_stack.setCurrentWidget(self._animation_panel)
+                else:
+                    self.preview_info.setText(
+                        'Animation detected, but no playable keyframes could be loaded.'
+                    )
+                    self.preview_stack.setCurrentWidget(self.preview_info)
+            elif kind in {'rbxm', 'anim', 'curve-anim'}:
+                self.preview_info.setText(
+                    'Roblox model data could not be parsed in the background. '
+                    'The original payload remains available through Export Entry.'
+                )
+                self.preview_stack.setCurrentWidget(self.preview_info)
             elif kind == 'xml':
                 # Keep non-Roblox XML readable as an XML document instead of
                 # opening an empty Roblox instance tree just because it has an
                 # XML declaration.
                 import xml.dom.minidom
 
-                try:
-                    pretty_xml = xml.dom.minidom.parseString(payload).toprettyxml(indent='  ')
-                    pretty_xml = '\n'.join(
-                        line for line in pretty_xml.splitlines() if line.strip()
+                if len(payload) <= 2 * 1024 * 1024:
+                    try:
+                        pretty_xml = xml.dom.minidom.parseString(payload).toprettyxml(indent='  ')
+                        pretty_xml = '\n'.join(
+                            line for line in pretty_xml.splitlines() if line.strip()
+                        )
+                    except Exception:
+                        pretty_xml = payload.decode('utf-8-sig', errors='replace')
+                else:
+                    pretty_xml = (
+                        payload[:200_000].decode('utf-8-sig', errors='replace')
+                        + '\n\n… XML preview truncated to 200 KB to keep the dashboard responsive.'
                     )
-                except Exception:
-                    pretty_xml = payload.decode('utf-8-sig', errors='replace')
                 self.preview_text.setPlainText(pretty_xml[:200_000])
                 self.preview_stack.setCurrentWidget(self.preview_text)
             elif kind == 'json' or payload.lstrip().startswith((b'{', b'[')):
