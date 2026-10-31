@@ -914,10 +914,17 @@ class ReplacerConfigWindow(QDialog):
                 else:
                     settings[migration_key] = True
 
-        if key not in settings:
-            existing_names = self.config_manager.config_names
-            hidden.update(name for name in existing_names if name != 'Default')
+        visibility_marker = 'legacy_replacer_visibility_initialized_v1'
+        if not settings.get(visibility_marker, False):
+            # ConfigManager may already provide an empty default list for this
+            # setting. Use an explicit version marker to recognize first launch
+            # after this migration, independent of defaults injected at startup.
+            hidden.update(
+                name for name in self.config_manager.config_names
+                if name != 'Default'
+            )
             settings['show_legacy_replacer_configs'] = False
+            settings[visibility_marker] = True
         else:
             settings.setdefault('show_legacy_replacer_configs', False)
 
