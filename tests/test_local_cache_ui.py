@@ -236,6 +236,7 @@ def test_scraper_db_page_navigation_does_not_snap_back_to_selected_row(
         config_manager=SimpleNamespace(settings={}),
         view_mode='slots',
     )
+    widget._load_slot_preview = lambda _entry: None
     try:
         entries = [
             RobloxCacheEntry(
