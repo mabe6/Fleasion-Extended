@@ -255,6 +255,7 @@ dependencies = [
     { name = "requests" },
     { name = "sounddevice" },
     { name = "soundfile" },
+    { name = "texture2ddecoder" },
     { name = "win11toast", marker = "sys_platform == 'win32'" },
     { name = "zstandard" },
 ]
@@ -291,6 +292,7 @@ requires-dist = [
     { name = "requests", specifier = ">=2.32.0" },
     { name = "sounddevice", specifier = ">=0.5.6" },
     { name = "soundfile", specifier = ">=0.13.1" },
+    { name = "texture2ddecoder", specifier = "==1.0.6" },
     { name = "win11toast", marker = "sys_platform == 'win32'", specifier = ">=0.36.3" },
     { name = "zstandard", specifier = ">=0.21.0" },
 ]
@@ -837,6 +839,12 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/ed/97/b39c18ac1df45e755ca22b8b00e872929da5d107998a207a5e4ac831bfda/soundfile-0.14.0-py2.py3-none-win_amd64.whl", hash = "sha256:299491d3499460fb1b74bb4bd78b57ffc2d243a5fafa7b6ec1b264875c78453e", size = 1021480, upload-time = "2026-06-06T08:58:45.016Z" },
     { url = "https://files.pythonhosted.org/packages/f4/83/55c65e61cf457805ce2ec157c1c6ae17715d0851aa2374422de0538838ca/soundfile-0.14.0-py2.py3-none-win_arm64.whl", hash = "sha256:e090704718e124e7c844695236f1fce8d18a5e761eaf7c82dfcd124620805f98", size = 888858, upload-time = "2026-06-06T08:58:46.593Z" },
 ]
+
+[[package]]
+name = "texture2ddecoder"
+version = "1.0.6"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/d8/25/603483a6c5f0fcd694732cbb079c83a026aa4ff153278a1f400c2bdf65e7/texture2ddecoder-1.0.6.tar.gz", hash = "sha256:88f04d8951018ac13b8dacd07e57e8adad4a6f1cfe5509646e8a1020346a81ca" }
 
 [[package]]
 name = "typing-extensions"

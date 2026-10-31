@@ -16,7 +16,7 @@ import socket
 import ssl
 from concurrent.futures import ThreadPoolExecutor
 from threading import Lock
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, urljoin, urlparse
 
 import requests
 
@@ -39,7 +39,15 @@ except ImportError:
 logger = logging.getLogger(__name__)
 
 ASSET_DELIVERY_HOST = 'assetdelivery.roblox.com'
-CDN_HOSTS = frozenset({'fts.rbxcdn.com', 'contentdelivery.roblox.com'})
+CDN_HOSTS = frozenset({
+    'fts.rbxcdn.com',
+    'contentdelivery.roblox.com',
+    'tr.rbxcdn.com',
+    'images.rbxcdn.com',
+    'static.rbxcdn.com',
+    *(f't{i}.rbxcdn.com' for i in range(8)),
+    *(f'sc{i}.rbxcdn.com' for i in range(8)),
+})
 DELIVERY_ENDPOINT = '/v1/assets/batch'
 CREATOR_GAME_PAGE_LIMITS = (50, 25, 10)
 CREATOR_GAME_MAX_SCAN = 300
@@ -142,6 +150,55 @@ def _normalize_asset_id(asset_id):
         except ValueError:
             return asset_id
     return asset_id
+
+
+def _infer_asset_type_from_payload(data: bytes, content_type: str = '') -> int:
+    """Infer a useful Roblox type for assets captured outside the batch API.
+
+    Batch responses include authoritative assetTypeId metadata. Direct /v1/asset
+    redirects do not, so use payload signatures only as a fallback.
+    """
+    if not data:
+        return 0
+
+    ktx1 = b'\xabKTX 11\xbb\r\n\x1a\n'
+    ktx2 = b'\xabKTX 20\xbb\r\n\x1a\n'
+    if data.startswith((ktx1, ktx2)):
+        # A Roblox KTX2 pack carries a packIndex key/value entry. Keep it raw
+        # as a TexturePack rather than sending it through the KTX->PNG API path.
+        if data.startswith(ktx2) and _ktx2_pack_index(data) is not None:
+            return 63
+        return 1
+    if data.startswith(b'version '):
+        return 4  # Mesh
+    if data.startswith((
+        b'\x89PNG\r\n\x1a\n',
+        b'\xff\xd8\xff',
+        b'BM',
+        b'GIF87a',
+        b'GIF89a',
+        b'DDS ',
+        b'8BPS',
+        b'\x00\x00\x01\x00',
+    )) or (len(data) >= 12 and data[:4] == b'RIFF' and data[8:12] in (b'WEBP', b'WAVE')):
+        return 3 if data[:4] == b'RIFF' and data[8:12] == b'WAVE' else 1
+    if data.startswith((b'OggS', b'ID3', b'\xff\xfb', b'\xff\xf3', b'\xff\xf2', b'fLaC')):
+        return 3
+    if data.startswith(b'<roblox!') or data.lstrip(b'\xef\xbb\xbf \t\r\n').startswith((b'<roblox', b'<?xml')):
+        sample = data[:2 * 1024 * 1024]
+        if b'TexturePack' in sample:
+            return 63
+        if b'KeyframeSequence' in sample or b'CurveAnimation' in sample:
+            return 24
+        return 10  # Model/XML payload
+    mime = str(content_type or '').lower()
+    if mime.startswith('image/'):
+        return 1
+    if mime.startswith('audio/'):
+        return 3
+    if 'font' in mime:
+        return 74
+    return 0
 
 
 def creator_game_base_paths(creator_id: int, creator_type: int, limit: int) -> list[str]:
@@ -629,18 +686,32 @@ class CacheScraper:
                     generation=generation,
                 )
 
+        # Direct /v1/asset redirects have no batch metadata. Infer a type from
+        # the actual decompressed bytes when the staged type is still unknown.
+        is_ktx_payload = inner[:8] in (b'\xabKTX 20\xbb', b'\xabKTX 11\xbb')
+
         # Store / convert for every original asset ID that shares this CDN URL
         for asset_id, asset_type in pending:
+            if not asset_type:
+                asset_type = _infer_asset_type_from_payload(inner, content_type)
+                if asset_type:
+                    with self._lock:
+                        info = self.cache_logs.get(asset_id)
+                        if info is not None:
+                            info['assetTypeId'] = asset_type
+
+            # TexturePack XML may need API conversion/fetching; raw KTX packs
+            # must stay raw even when the inferred type is TexturePack.
             needs_conversion = (
-                asset_type in (1, 13) and inner[:8] in (b'\xabKTX 20\xbb', b'\xabKTX 11\xbb')
-            ) or asset_type == 63
+                asset_type in (1, 13) and is_ktx_payload
+            ) or (asset_type == 63 and not is_ktx_payload)
 
             if needs_conversion:
                 self._submit_background(
                     self._fetch_and_update_cache,
                     asset_id,
                     asset_type,
-                    full_url,
+                    base_url,
                     metadata,
                     body,
                     inner,
@@ -652,7 +723,7 @@ class CacheScraper:
                     asset_id,
                     asset_type,
                     inner,
-                    full_url,
+                    base_url,
                     metadata,
                     generation=generation,
                 )
@@ -1137,7 +1208,7 @@ class CacheScraper:
                         metadata=metadata,
                     )
                     if success:
-                        log_buffer.log('Cache', f'KTX\u2192PNG (local): {asset_id}')
+                        log_buffer.log('Cache', f'KTX\u2192PNG (local): {asset_id}', level='DEBUG')
                     return
 
             api_content = self._fetch_from_api(asset_id)
@@ -1164,6 +1235,7 @@ class CacheScraper:
                         log_buffer.log(
                             'Cache',
                             f'Converted {type_name} to {content_desc}: {asset_id}',
+                            level='DEBUG',
                         )
                         # For TexturePack: preserve raw KTX2 sidecar AND populate
                         # the sub-asset lookup so replacements can target sub-asset IDs.
@@ -1193,7 +1265,7 @@ class CacheScraper:
                 )
                 if success:
                     type_name = self.cache_manager.get_asset_type_name(asset_type)
-                    log_buffer.log('Cache', f'Cached {type_name} (raw fallback): {asset_id}')
+                    log_buffer.log('Cache', f'Cached {type_name} (raw fallback): {asset_id}', level='DEBUG')
         except Exception as exc:
             log_buffer.log('Cache', f'Background conversion error for {asset_id}: {exc}')
             if original_content is not None and self._generation_is_current(generation):
@@ -1401,6 +1473,7 @@ class CacheScraper:
                     'TexPackSlot',
                     f'Archived {parent_id} slot{slot} {pack_label} q={quality} '
                     f'{new_w}x{new_h} mips={level_count} sha256={digest[:12]}',
+                    level='DEBUG',
                 )
 
             if canonical_action is not None:
@@ -1410,12 +1483,14 @@ class CacheScraper:
                         'TexPackSlot',
                         f'Upgrading canonical {parent_id} slot{slot}: '
                         f'{old_w}x{old_h} -> {new_w}x{new_h}',
+                        level='DEBUG',
                     )
                 elif action == 'replaced':
                     log_buffer.log(
                         'TexPackSlot',
                         f'Replacing equal-resolution canonical {parent_id} slot{slot}: '
                         f'{new_w}x{new_h}, bytes changed',
+                        level='DEBUG',
                     )
 
                 slot_name = _TEXPACK_SLOT_NAMES.get(slot, f'slot{slot}')
@@ -1423,6 +1498,7 @@ class CacheScraper:
                     'TexPackSlot',
                     f'Canonical {slot_name} {new_w}x{new_h} for pack {parent_id} '
                     f'({len(ktx2_bytes)} bytes) -> {slot_path.name}',
+                    level='DEBUG',
                 )
         except Exception as exc:
             log_buffer.log('TexPackSlot', f'Failed to store slot {slot} for {parent_id}: {exc}')
@@ -1475,7 +1551,7 @@ class CacheScraper:
             )
             if success:
                 type_name = self.cache_manager.get_asset_type_name(asset_type)
-                log_buffer.log('Cache', f'Cached {type_name}: {asset_id} ({len(data)} bytes)')
+                log_buffer.log('Cache', f'Cached {type_name}: {asset_id} ({len(data)} bytes)', level='DEBUG')
         except Exception as exc:
             log_buffer.log('Cache', f'Cache store error for {asset_id}: {exc}')
 
@@ -1503,7 +1579,7 @@ class CacheScraper:
                 )
                 if success:
                     type_name = self.cache_manager.get_asset_type_name(asset_type)
-                    log_buffer.log('Cache', f'Replicated {type_name}: {dest_id} (from {source_id})')
+                    log_buffer.log('Cache', f'Replicated {type_name}: {dest_id} (from {source_id})', level='DEBUG')
         except Exception as exc:
             log_buffer.log('Cache', f'Replication error {source_id}->{dest_id}: {exc}')
 
@@ -1524,7 +1600,8 @@ class CacheScraper:
             self.cache_manager.store_raw_asset(asset_id, asset_type, data)
             return True
 
-    # DEBUG: Direct /v1/asset/ response hook (non-batch blind spot)
+    # Direct /v1/asset responses are often redirects with an EMPTY body.
+    # Register their Location URL here so the subsequent CDN response is cached.
 
     def process_direct_asset_response(
         self,
@@ -1534,57 +1611,99 @@ class CacheScraper:
         body: bytes,
         content_type: str,
     ) -> None:
-        """Called by the proxy for every non-batch assetdelivery.roblox.com response.
+        """Track direct asset redirects and cache any direct payloads.
 
-        This is the blind spot where TexturePack sub-asset IDs (e.g. the normal
-        map referenced inside the TexturePack XML) flow through without being
-        tracked by the scraper.
-
-        In DEBUG mode we just log every observation so we can confirm the theory.
-        We extract the asset ID from the path query string (``?id=<id>``) and log
-        the full context so it's easy to correlate with the batch log.
+        Unlike /v1/assets/batch, this endpoint does not return assetTypeId
+        metadata. For redirects, the ID-to-CDN mapping is staged until the CDN
+        body arrives, at which point the payload signature supplies a fallback
+        type. Signed query parameters are deliberately stripped from the map key.
         """
         if not self.enabled:
             return
 
-        # Parse asset ID out of path like /v1/asset/?id=7547298681
-        import re as _re
-
-        _m = _re.search(r'[?&]id=(\d+)', path)
-        asset_id = _m.group(1) if _m else None
-
-        # Identify the body magic so we know what kind of asset this is
-        magic = body[:8].hex() if body else 'empty'
-        body_snippet = body[:64].hex() if body else 'empty'
-
-        # Is this a 302 redirect to the CDN, or direct bytes?
-        is_redirect = (status in (301, 302, 303, 307, 308)) and bool(location)
-
-        log_buffer.log(
-            'DEBUG_DIRECT',
-            f'[DIRECT ASSET] asset_id={asset_id!r} '
-            f'status={status} is_redirect={is_redirect} '
-            f'body_len={len(body)} magic={magic} '
-            f'content_type={content_type!r}',
+        parsed_path = urlparse(path)
+        query = parse_qs(parsed_path.query)
+        raw_asset_id = next(
+            (query.get(key, [None])[0] for key in ('id', 'assetId') if query.get(key)),
+            None,
         )
+        asset_id = _normalize_asset_id(raw_asset_id) if raw_asset_id is not None else None
+        is_redirect = status in (301, 302, 303, 307, 308) and bool(location)
 
+        if asset_id is None or isinstance(asset_id, bool):
+            log_buffer.log(
+                'Cache',
+                f'Ignored direct asset response without a numeric asset ID (status={status}).',
+            )
+            return
+
+        generation = self._work_generation
         if is_redirect:
-            # The CDN URL in Location: will be fetched next as a Roblox CDN
-            # request, but it WON'T be in _url_to_asset so process_cdn_response
-            # will silently drop it. Log only a non-sensitive CDN id.
-            _cdn_id = str(location).split('?', 1)[0].rsplit('/', 1)[-1]
+            target_url = urljoin(f'https://{ASSET_DELIVERY_HOST}{path}', location)
+            target = urlparse(target_url)
+            base_url = target._replace(query='', fragment='').geturl()
+            host = (target.hostname or '').lower().rstrip('.')
+            inferred_type = _infer_asset_type_from_payload(body, content_type)
+
+            with self._lock:
+                info = self.cache_logs.setdefault(asset_id, {})
+                previous_location = info.get('location')
+                asset_type = info.get('assetTypeId') or inferred_type or 0
+                if previous_location != base_url:
+                    info.pop('cached', None)
+                info.update({'location': base_url, 'assetTypeId': asset_type})
+
+                url_list = self._url_to_asset.setdefault(base_url, [])
+                if asset_id not in url_list:
+                    url_list.append(asset_id)
+
+            if host not in CDN_HOSTS:
+                log_buffer.log(
+                    'DEBUG_CDN',
+                    f'[DIRECT ASSET] CDN host not in the intercepted host list: {host or "<missing>"} '
+                    f'(asset_id={asset_id})',
+                )
+            log_buffer.log(
+                'Cache',
+                f'Tracking direct asset redirect: asset_id={asset_id}, '
+                f'cdn_host={host or "<missing>"}, asset_type={asset_type or "pending detection"}.',
+                level='DEBUG',
+            )
+            return
+
+        if not body:
             log_buffer.log(
                 'DEBUG_DIRECT',
-                f'[DIRECT ASSET REDIRECT] asset_id={asset_id!r} cdn_id={_cdn_id!r}  '
-                f'<-- this CDN URL will NOT be caught by process_cdn_response '
-                f'because it was never registered via a batch response',
+                f'[DIRECT ASSET] empty non-redirect response for asset_id={asset_id}, status={status}',
             )
-        else:
-            # Direct bytes (rare for images but possible). Log what we got.
-            log_buffer.log(
-                'DEBUG_DIRECT',
-                f'[DIRECT ASSET BYTES] asset_id={asset_id!r} body_head={body_snippet}',
-            )
+            return
+
+        asset_type = _infer_asset_type_from_payload(body, content_type)
+        with self._lock:
+            info = self.cache_logs.setdefault(asset_id, {})
+            info.update({'location': f'https://{ASSET_DELIVERY_HOST}{path}', 'assetTypeId': asset_type})
+            info['cached'] = True
+        metadata = {
+            'url': f'https://{ASSET_DELIVERY_HOST}{parsed_path.path}',
+            'content_type': content_type,
+            'content_length': len(body),
+            'direct_asset_response': True,
+        }
+        self._submit_background(
+            self._store_asset_async,
+            str(asset_id),
+            asset_type,
+            body,
+            metadata['url'],
+            metadata,
+            generation=generation,
+        )
+        log_buffer.log(
+            'Cache',
+            f'Cached direct asset response: asset_id={asset_id}, '
+            f'asset_type={asset_type or "unknown"}, bytes={len(body)}.',
+            level='DEBUG',
+        )
 
     # GUI-callable interface (same as before - no change needed in GUI code)
 

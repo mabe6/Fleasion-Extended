@@ -1,6 +1,6 @@
 """Utilities package."""
 
-from .logging import LogBuffer, log_buffer
+from .logging import LogBuffer, install_exception_hooks, log_buffer, setup_logging
 from .metadata import (
     APP_AUTHOR,
     APP_CONCEPT,
@@ -99,6 +99,8 @@ __all__ = [
     'STRIPPABLE_ASSET_TYPES',
     'USER_HOME',
     'LogBuffer',
+    'install_exception_hooks',
+    'setup_logging',
     'TimeTracker',
     'time_tracker',
     'delete_cache',

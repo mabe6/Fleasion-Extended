@@ -97,6 +97,21 @@ _CONFIG_MENU_BUTTON_POPUP_EXTRA_WIDTH_PX = 24
 _ID_SPLIT_RE = re.compile(r'[,\s;]+')
 
 
+
+# The HTTP interception path is not currently functional in this fork.
+# Flip this flag to True when an end-to-end HTTP proxy implementation is available.
+HTTP_PROXY_SUPPORT_AVAILABLE = False
+
+
+def _sync_http_proxy_tab_visibility(tab_widget: QTabWidget, widgets: list[QWidget]) -> None:
+    """Hide whole dashboard tabs whose primary function requires HTTP interception."""
+    visible = HTTP_PROXY_SUPPORT_AVAILABLE
+    for widget in widgets:
+        index = tab_widget.indexOf(widget)
+        if index >= 0:
+            tab_widget.setTabVisible(index, visible)
+
+
 def _ensure_text_width(widget: QWidget, minimum_width: int = 0) -> None:
     """Keep translated widget text from being clipped by legacy fixed widths."""
     widget.setMinimumWidth(max(minimum_width, widget.sizeHint().width()))
@@ -657,6 +672,7 @@ class ReplacerConfigWindow(QDialog):
     ):
         super().__init__()
         self.config_manager = config_manager
+        self._initialize_legacy_profile_visibility()
         self.proxy_master = proxy_master
         self._mod_manager = mod_manager
         self.roblox_monitor = roblox_monitor
@@ -731,46 +747,64 @@ class ReplacerConfigWindow(QDialog):
             self.setWindowIcon(QIcon(str(icon_path)))
 
     def _setup_ui(self):
-        """Setup the UI with tabs."""
+        """Build the Fleasion dashboard around the fork's local-first cache backend."""
         main_layout = QVBoxLayout()
         main_layout.setContentsMargins(0, 0, 0, 0)
 
-        # Create tab widget
         self.tab_widget = QTabWidget()
+        self._registered_module_interceptors = []
 
-        # Create Replacer tab
-        replacer_tab = self._create_replacer_tab()
-        self.tab_widget.addTab(replacer_tab, tr('ui.gui.replacer_config.replacer'))
+        from ..database.hash_replacer_store import HashReplacerStore
 
-        # Create Cache tab if proxy_master is available
-        if self.proxy_master and hasattr(self.proxy_master, 'cache_manager'):
-            cache_tab = self._create_cache_tab()
-            self.tab_widget.addTab(cache_tab, tr('ui.gui.replacer_config.scraper'))
+        hash_root = Path(self.config_manager.configs_folder).parent / 'HashReplacer'
+        self._hash_replacer_store = HashReplacerStore(root=hash_root)
 
-        # Create Modifications tab
+        # The original Asset-ID editor remains the main Replacer. Cache-hash
+        # mappings are opened separately from Miscellaneous and never appear
+        # as a nested Replacer tab.
+        from .roblox_cache_tab import RobloxCacheTab
+
+        self._replacer_tab = self._create_replacer_tab()
+        self.tab_widget.addTab(
+            self._replacer_tab,
+            tr('ui.gui.replacer_config.replacer'),
+        )
+
+        # Scraper DB keeps the original workflow and label, but reads the
+        # local cache through RobloxCacheStore instead of the retired scraper.
+        self._asset_explorer_tab = RobloxCacheTab(
+            self,
+            config_manager=self.config_manager,
+            view_mode='slots',
+        )
+        self._scraper_db_tab = self._asset_explorer_tab
+        self.tab_widget.addTab(self._scraper_db_tab, 'Scraper DB')
+
         if self._mod_manager is not None:
             from .modifications_tab import ModificationsTab
 
-            modifications_tab = ModificationsTab(
+            self._modifications_tab = ModificationsTab(
                 self._mod_manager,
                 self.roblox_monitor,
                 config_manager=self.config_manager,
                 proxy_master=self.proxy_master,
                 hotkey_controller=self._hotkey_controller,
             )
-            self.tab_widget.addTab(modifications_tab, tr('ui.gui.replacer_config.modifications'))
+            self.tab_widget.addTab(
+                self._modifications_tab,
+                tr('ui.gui.replacer_config.modifications'),
+            )
 
-        # Create Rando Stuff tab
         from .rando_stuff_tab import RandoStuffTab
+        from .subplace_joiner_tab import SubplaceJoinerTab
 
         self._rando_stuff_tab = RandoStuffTab(
+            self,
             config_manager=self.config_manager,
             proxy_master=self.proxy_master,
+            hash_asset_store=self._hash_replacer_store,
+            cache_store=self._scraper_db_tab.store,
         )
-        self._registered_module_interceptors = []
-
-        # Create Subplace Joiner tab
-        from .subplace_joiner_tab import SubplaceJoinerTab
 
         self._subplace_tab = SubplaceJoinerTab(
             rando_tab=self._rando_stuff_tab,
@@ -781,40 +815,56 @@ class ReplacerConfigWindow(QDialog):
             self._subplace_tab.set_selected_account
         )
         self.tab_widget.addTab(
-            self._proxy_required(self._subplace_tab), tr('ui.gui.replacer_config.subplace_joiner')
+            self._proxy_required(self._subplace_tab),
+            tr('ui.gui.replacer_config.subplace_joiner'),
         )
         if self.proxy_master is not None:
             self.proxy_master.register_module_interceptor(self._subplace_tab)
             self._registered_module_interceptors.append(self._subplace_tab)
 
-        self.tab_widget.addTab(self._rando_stuff_tab, tr('ui.gui.replacer_config.miscellaneous'))
+        self.tab_widget.addTab(
+            self._rando_stuff_tab,
+            tr('ui.gui.replacer_config.miscellaneous'),
+        )
         if self.proxy_master is not None:
             self.proxy_master.register_module_interceptor(self._rando_stuff_tab)
             self._registered_module_interceptors.append(self._rando_stuff_tab)
 
-        # Create Proxy tab
-        from .proxy_tab import ProxyTrafficTab
-
-        self._proxy_traffic_tab = ProxyTrafficTab(
-            config_manager=self.config_manager,
-            proxy_master=self.proxy_master,
-        )
-        self.tab_widget.addTab(
-            self._env_proxy_required(self._proxy_traffic_tab), tr('ui.gui.replacer_config.proxy')
-        )
-
-        # Create Settings tab
         from .settings_tab import SettingsTab
 
-        self._settings_tab = SettingsTab(self.config_manager, system_tray=self._system_tray)
-        self.tab_widget.addTab(self._settings_tab, tr('ui.gui.replacer_config.settings'))
+        self._settings_tab = SettingsTab(
+            self.config_manager,
+            system_tray=self._system_tray,
+            parent=self,
+        )
+        self._settings_tab.probe_header_visibility_changed.connect(
+            self._scraper_db_tab.set_probe_header_enabled
+        )
+        self._settings_tab.asset_database_preview_visibility_changed.connect(
+            self._scraper_db_tab.set_preview_enabled
+        )
+        self.tab_widget.addTab(
+            self._settings_tab,
+            tr('ui.gui.replacer_config.settings'),
+        )
 
+        from .local_database_editor import LocalDatabaseEditorWidget
+
+        self._advanced_sql_tab = LocalDatabaseEditorWidget(
+            self,
+            embedded=True,
+            config_manager=self.config_manager,
+        )
+        self._sqlite_browser_tab = self._advanced_sql_tab
+        self.tab_widget.addTab(self._advanced_sql_tab, 'Advanced SQL')
+
+        self.tab_widget.setCurrentWidget(self._replacer_tab)
         main_layout.addWidget(self.tab_widget)
-
         self.setLayout(main_layout)
+
         self.set_proxy_features_enabled(self.config_manager.proxy_features_enabled)
 
-        # Setup keyboard shortcuts
+        # Restore the keyboard shortcuts used by the original Replacer UI.
         from PyQt6.QtGui import QKeySequence, QShortcut
 
         undo_shortcut = QShortcut(QKeySequence('Ctrl+Z'), self)
@@ -828,6 +878,140 @@ class ReplacerConfigWindow(QDialog):
 
         escape_shortcut = QShortcut(QKeySequence('Escape'), self)
         escape_shortcut.activated.connect(self.close)
+
+    def _initialize_legacy_profile_visibility(self) -> None:
+        """Archive old Asset-ID profiles while keeping a clean active Default."""
+        settings = self.config_manager.settings
+        key = 'hidden_legacy_replacer_configs'
+        hidden_value = settings.get(key, [])
+        hidden = {
+            str(name) for name in hidden_value
+        } if isinstance(hidden_value, list) else set()
+
+        # Earlier migration builds left Default visible. Preserve its rules so
+        # they remain available for conversion in Miscellaneous.
+        migration_key = 'legacy_default_replacer_archived_v1'
+        if not settings.get(migration_key, False):
+            if 'Default' in self.config_manager.config_names:
+                try:
+                    default_rules = self.config_manager.get_replacement_rules('Default')
+                except Exception:
+                    default_rules = []
+                if default_rules:
+                    archive_name = 'Legacy Default'
+                    suffix = 2
+                    while archive_name in self.config_manager.config_names:
+                        archive_name = f'Legacy Default ({suffix})'
+                        suffix += 1
+                    if self.config_manager.rename_config('Default', archive_name):
+                        hidden.add(archive_name)
+                        created = self.config_manager.create_config('Default')
+                        settings['last_config'] = 'Default'
+                        settings[migration_key] = bool(created)
+                    else:
+                        # Retry on a later launch if the old profile could not be archived.
+                        settings[migration_key] = False
+                else:
+                    settings[migration_key] = True
+
+        # An upgraded installation may contain only legacy JSON files and no
+        # active Default profile. Keep one visible destination profile so the
+        # hidden-profile fallback can never expose a legacy profile again.
+        if 'Default' not in self.config_manager.config_names:
+            self.config_manager.create_config('Default')
+            settings['last_config'] = 'Default'
+
+        visibility_marker = 'legacy_replacer_visibility_initialized_v1'
+        if not settings.get(visibility_marker, False):
+            # ConfigManager may already provide an empty default list for this
+            # setting. Use an explicit version marker to recognize first launch
+            # after this migration, independent of defaults injected at startup.
+            hidden.update(
+                name for name in self.config_manager.config_names
+                if name != 'Default'
+            )
+            settings['show_legacy_replacer_configs'] = False
+            settings[visibility_marker] = True
+        else:
+            settings.setdefault('show_legacy_replacer_configs', False)
+
+        current_names = self.config_manager.config_names
+        settings[key] = [
+            name for name in current_names
+            if name in hidden and name != 'Default'
+        ]
+        settings.setdefault('show_legacy_replacer_configs', False)
+        if (
+            not settings.get('show_legacy_replacer_configs', False)
+            and settings.get('last_config', 'Default') in set(settings[key])
+        ):
+            settings['last_config'] = 'Default'
+        self.config_manager.save()
+
+    def _legacy_profile_names(self) -> list[str]:
+        hidden = set(self.config_manager.settings.get('hidden_legacy_replacer_configs', []))
+        return [name for name in self.config_manager.config_names if name in hidden]
+
+    def _visible_replacer_config_names(self) -> list[str]:
+        names = self.config_manager.config_names
+        if self.config_manager.settings.get('show_legacy_replacer_configs', False):
+            return names
+        hidden = set(self.config_manager.settings.get('hidden_legacy_replacer_configs', []))
+        visible = [name for name in names if name not in hidden]
+        return visible or (['Default'] if 'Default' in names else names[:1])
+
+    def set_legacy_profiles_visible(self, visible: bool) -> None:
+        """Show/hide archived profiles in the main Asset-ID editor without moving them."""
+        self.config_manager.settings['show_legacy_replacer_configs'] = bool(visible)
+        if not visible and self.config_manager.last_config in set(self._legacy_profile_names()):
+            self.config_manager.last_config = 'Default'
+        self.config_manager.save()
+        self._sync_config_state_from_disk()
+        self._rebuild_editing_menu()
+        self._rebuild_enabled_menu(sync_from_disk=False)
+
+    def _remember_hash_replacer_profile(self, name: str) -> None:
+        if not name:
+            return
+        settings = self.config_manager.settings
+        if settings.get('last_hash_replacer_profile') == name:
+            return
+        settings['last_hash_replacer_profile'] = name
+        self.config_manager.save()
+
+    def _open_hash_replacer_dialog(self, target_hash: str = '') -> None:
+        """Open the cache-hash editor as a separate utility, not as a Replacer tab."""
+        dialog = getattr(self, '_hash_replacer_dialog', None)
+        if dialog is None:
+            dialog = QDialog(self)
+            dialog.setWindowTitle('Asset Hash Replacer')
+            dialog.resize(980, 620)
+            from .hash_replacer_tab import HashReplacerTab
+
+            self._hash_replacer_tab = HashReplacerTab(
+                dialog,
+                asset_store=self._hash_replacer_store,
+                cache_store=self._scraper_db_tab.store,
+            )
+            self._hash_replacer_tab.profile_combo.currentTextChanged.connect(
+                self._remember_hash_replacer_profile
+            )
+            selected_profile = str(
+                self.config_manager.settings.get('last_hash_replacer_profile', 'Default')
+            )
+            self._hash_replacer_tab.refresh_profiles(selected_profile)
+            self._hash_replacer_tab.cache_changed.connect(self._scraper_db_tab.refresh)
+            layout = QVBoxLayout(dialog)
+            layout.setContentsMargins(0, 0, 0, 0)
+            layout.addWidget(self._hash_replacer_tab)
+            self._hash_replacer_dialog = dialog
+        elif hasattr(self, '_hash_replacer_tab'):
+            self._hash_replacer_tab.cache_store = self._scraper_db_tab.store
+        if target_hash and hasattr(self, '_hash_replacer_tab'):
+            self._hash_replacer_tab.set_target_hash(target_hash)
+        dialog.show()
+        dialog.raise_()
+        dialog.activateWindow()
 
     def _proxy_required(self, widget: QWidget) -> ProxyGate:
         gate = ProxyGate(widget)
@@ -866,9 +1050,10 @@ class ReplacerConfigWindow(QDialog):
         self.refresh_env_proxy_gate()
 
     def _create_replacer_tab(self):
-        """Create the replacer configuration tab."""
+        """Build the original Asset-ID Replacer as the single main Replacer view."""
         replacer_widget = QWidget()
-        replacer_layout = QVBoxLayout()
+        self._asset_id_replacer_tab = replacer_widget
+        replacer_layout = QVBoxLayout(replacer_widget)
         replacer_layout.setContentsMargins(0, 0, 0, 0)
 
         top_section_widget = QWidget()
@@ -876,22 +1061,17 @@ class ReplacerConfigWindow(QDialog):
         top_section_layout.setContentsMargins(0, 0, 0, 0)
         top_section_layout.setSpacing(6)
 
-        # Config selector section
         self._create_config_section(top_section_layout)
-
-        # Rules tree section
         self._create_tree_section(top_section_layout)
-
-        self._replacer_top_proxy_gate = self._proxy_required(top_section_widget)
-        replacer_layout.addWidget(self._replacer_top_proxy_gate)
-
-        # Edit section
+        asset_id_note = QLabel(
+            "Asset ID rules are the original proxy-based workflow. For direct local Roblox cache "
+            "replacement without the HTTP proxy, use Miscellaneous → Asset Hash."
+        )
+        asset_id_note.setWordWrap(True)
+        replacer_layout.addWidget(asset_id_note)
+        replacer_layout.addWidget(top_section_widget)
         self._create_edit_section(replacer_layout)
-
-        # Footer
         self._create_footer(replacer_layout)
-
-        replacer_widget.setLayout(replacer_layout)
         return replacer_widget
 
     def _create_cache_tab(self):
@@ -1118,9 +1298,8 @@ class ReplacerConfigWindow(QDialog):
         footer_layout = QHBoxLayout(footer_widget)
         footer_layout.setContentsMargins(8, 4, 8, 4)
 
-        self._configs_path_label = _ElidedLabel(
-            tr('ui.gui.replacer_config.configs_value', value0=self.config_manager.configs_folder)
-        )
+        self._configs_path_label = _ElidedLabel('Configs folder')
+        self._configs_path_label.setToolTip(str(self.config_manager.configs_folder))
         self._configs_path_label.setStyleSheet(
             'color: gray; font-size: 8pt; padding-left: 5px;'
         )
@@ -1151,9 +1330,7 @@ class ReplacerConfigWindow(QDialog):
     def _open_configs_folder(self):
         """Open the same config folder used by this window's ConfigManager."""
         configs_folder = self.config_manager.configs_folder
-        self._configs_path_label.set_full_text(
-            tr('ui.gui.replacer_config.configs_value', value0=configs_folder)
-        )
+        self._configs_path_label.setToolTip(str(configs_folder))
         open_folder(configs_folder)
 
     def _clear_roblox_cache(self):
@@ -1199,7 +1376,7 @@ class ReplacerConfigWindow(QDialog):
         self.config_enabled_vars.clear()
 
         # Clean up enabled configs that no longer exist on disk
-        current_configs = self.config_manager.config_names
+        current_configs = self._visible_replacer_config_names()
         enabled = self.config_manager.enabled_configs
         enabled_set = set(enabled)
         for name in enabled[:]:  # Copy list to allow modification
@@ -1227,15 +1404,27 @@ class ReplacerConfigWindow(QDialog):
 
     def _update_enabled_menu_text(self):
         """Update the enabled menu button text."""
-        enabled = self.config_manager.enabled_configs
+        visible = set(self._visible_replacer_config_names())
+        enabled = [name for name in self.config_manager.enabled_configs if name in visible]
+        hidden_enabled = [
+            name for name in self.config_manager.enabled_configs if name not in visible
+        ]
         if not enabled:
-            self.enabled_menu_btn.setText(tr('ui.gui.replacer_config.no_configs_enabled'))
+            # Keep the compact button readable in every supported language.
+            self.enabled_menu_btn.setText(tr('ui.gui.replacer_config.select'))
+            self.enabled_menu_btn.setToolTip(tr('ui.gui.replacer_config.no_configs_enabled'))
         elif len(enabled) == 1:
             self.enabled_menu_btn.setText(enabled[0])
         else:
             self.enabled_menu_btn.setText(
                 tr('ui.gui.replacer_config.value_configs_enabled', value0=len(enabled))
             )
+        if hidden_enabled:
+            self.enabled_menu_btn.setToolTip(
+                f'{len(hidden_enabled)} archived profile(s) remain enabled but are hidden from this menu.'
+            )
+        else:
+            self.enabled_menu_btn.setToolTip('')
         # Keep the Editing button styled to reflect whether the currently
         # selected editing profile is enabled or not.
         try:
@@ -1584,6 +1773,10 @@ class ReplacerConfigWindow(QDialog):
         previous_tree_config = getattr(self, '_tree_config_name', previous_config)
         changed = self.config_manager.reconcile_configs()
         current_config = self.config_manager.last_config
+        visible_configs = self._visible_replacer_config_names()
+        if current_config not in visible_configs:
+            current_config = visible_configs[0]
+            self.config_manager.last_config = current_config
         selected_config_changed = previous_config != current_config
         tree_config_changed = previous_tree_config != current_config
 
@@ -1607,7 +1800,7 @@ class ReplacerConfigWindow(QDialog):
     def _rebuild_editing_menu(self):
         """Rebuild the editing config menu."""
         self._sync_config_state_from_disk()
-        current_configs = self.config_manager.config_names
+        current_configs = self._visible_replacer_config_names()
         enabled = set(self.config_manager.enabled_configs)
 
         entries = []
@@ -1642,7 +1835,7 @@ class ReplacerConfigWindow(QDialog):
     def _on_config_select(self, name: str):
         """Handle config selection from menu."""
         self._sync_config_state_from_disk()
-        if name not in self.config_manager.config_names:
+        if name not in self._visible_replacer_config_names():
             return
         if name != self.config_manager.last_config:
             self.config_manager.last_config = name
@@ -1820,7 +2013,7 @@ class ReplacerConfigWindow(QDialog):
                     self._refresh_combo()
 
         elif action == 'delete':
-            if len(self.config_manager.config_names) <= 1:
+            if len(self._visible_replacer_config_names()) <= 1:
                 QMessageBox.critical(
                     self,
                     tr('ui.gui.replacer_config.error'),

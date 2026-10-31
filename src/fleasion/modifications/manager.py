@@ -1115,30 +1115,26 @@ class ModificationManager(QObject):
         return data
 
     def _fetch_asset(self, asset_id: str) -> bytes:
-        """Download an asset by ID, caching to ModCache."""
-        cache_file = MOD_CACHE_DIR / f'{asset_id}.bin'
+        """Download an asset by numeric Roblox ID without requiring the HTTP proxy."""
+        from ..utils.asset_lookup import AssetLookupError, download_asset
+
+        value = str(asset_id).strip()
+        if not re.fullmatch(r'[1-9][0-9]{0,19}', value):
+            raise ValueError('Enter a numeric Roblox Asset ID.')
+
+        cache_file = MOD_CACHE_DIR / f'{value}.bin'
         if cache_file.is_file():
             return cache_file.read_bytes()
 
-        if self._cache_scraper is None:
-            raise RuntimeError(
-                'No cache scraper available. Asset ID download requires the proxy to be running.'
-            )
-
-        extra_hdrs = {}
-        cookie = self._cache_scraper._get_roblosecurity(wait=True)
-        if cookie:
-            extra_hdrs['Cookie'] = f'.ROBLOSECURITY={cookie};'
-        data, status = self._cache_scraper._fetch_asset_with_place_id_retry(
-            str(asset_id), extra_headers=extra_hdrs or None
-        )
-        if data is None:
-            if status == 403:
-                raise PermissionError('Asset not found or private. Add .ROBLOSECURITY cookie.')
-            raise RuntimeError(f'Asset download failed (HTTP {status})')
-
-        cache_file.write_bytes(data)
-        return data
+        MOD_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+        try:
+            # download_asset creates an authenticated Roblox session using the
+            # locally available .ROBLOSECURITY cookie; no cache-scraper proxy is
+            # needed for assets that the current account is allowed to access.
+            download_asset(value, cache_file)
+        except AssetLookupError as exc:
+            raise RuntimeError(str(exc)) from exc
+        return cache_file.read_bytes()
 
     @staticmethod
     def _looks_like_obj(data: bytes) -> bool:

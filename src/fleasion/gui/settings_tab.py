@@ -3,7 +3,7 @@
 import sys
 from pathlib import Path
 
-from PyQt6.QtCore import QEvent, Qt, QTimer
+from PyQt6.QtCore import QEvent, Qt, QTimer, pyqtSignal
 from PyQt6.QtWidgets import (
     QButtonGroup,
     QCheckBox,
@@ -107,7 +107,10 @@ class EnvProxyWarningDialog(QMessageBox):
 
 
 class SettingsTab(QWidget):
-    """Settings tab exposing all options found in the system tray Settings menu."""
+    """Settings tab for options relevant to the current Fleasion build."""
+
+    probe_header_visibility_changed = pyqtSignal(bool)
+    asset_database_preview_visibility_changed = pyqtSignal(bool)
 
     def __init__(self, config_manager, system_tray=None, parent=None):
         super().__init__(parent)
@@ -144,13 +147,12 @@ class SettingsTab(QWidget):
         self._container_layout.addWidget(self._build_appearance_section())
         if sys.platform.startswith('linux'):
             self._container_layout.addWidget(self._build_linux_client_section())
-        self._container_layout.addWidget(self._build_proxy_section())
+        # HTTP interception is disabled in this local-cache-focused build, so hide
+        # the proxy transport settings instead of presenting controls that do nothing.
+        self._container_layout.addWidget(self._build_local_cache_section())
         self._container_layout.addWidget(self._build_convenience_section())
         if sys.platform == 'darwin':
             self._container_layout.addWidget(self._build_macos_auth_section())
-        self._container_layout.addWidget(self._build_scraper_section())
-        self._container_layout.addWidget(self._build_scraped_games_section())
-        self._container_layout.addWidget(self._build_export_section())
         self._container_layout.addStretch()
 
         container.setLayout(self._container_layout)
@@ -315,6 +317,59 @@ class SettingsTab(QWidget):
         row_widget.setLayout(row)
         section.add_widget(row_widget)
         return section
+
+    # Local cache
+
+    def _build_local_cache_section(self) -> CollapsibleSection:
+        section = CollapsibleSection('Local Cache Tools', expanded=True)
+        settings = getattr(self._config, 'settings', {})
+        settings = settings if isinstance(settings, dict) else {}
+
+        probe_enabled = bool(settings.get('show_cache_probe_header', False))
+        self._probe_header_tools_chk = QCheckBox(
+            'Show Probe Header button and output in Asset Explorer'
+        )
+        self._probe_header_tools_chk.setChecked(probe_enabled)
+        self._probe_header_tools_chk.toggled.connect(self._on_probe_header_tools_toggled)
+        section.add_widget(self._probe_header_tools_chk)
+
+        self._asset_database_preview_chk = QCheckBox(
+            'Show preview panel in Asset Explorer'
+        )
+        self._asset_database_preview_chk.setChecked(
+            bool(settings.get('asset_database_preview_enabled', True))
+        )
+        self._asset_database_preview_chk.toggled.connect(
+            self._on_asset_database_preview_toggled
+        )
+        section.add_widget(self._asset_database_preview_chk)
+
+        note = QLabel(
+            'Optional tools for the local cache. Preview panels can be disabled '
+            'to give the asset tables more room.'
+        )
+        note.setWordWrap(True)
+        note.setStyleSheet('color: #888;')
+        section.add_widget(note)
+        return section
+
+    def _on_probe_header_tools_toggled(self, enabled: bool) -> None:
+        settings = getattr(self._config, 'settings', None)
+        if isinstance(settings, dict):
+            settings['show_cache_probe_header'] = bool(enabled)
+            save = getattr(self._config, 'save', None)
+            if callable(save):
+                save()
+        self.probe_header_visibility_changed.emit(bool(enabled))
+
+    def _on_asset_database_preview_toggled(self, enabled: bool) -> None:
+        settings = getattr(self._config, 'settings', None)
+        if isinstance(settings, dict):
+            settings['asset_database_preview_enabled'] = bool(enabled)
+            save = getattr(self._config, 'save', None)
+            if callable(save):
+                save()
+        self.asset_database_preview_visibility_changed.emit(bool(enabled))
 
     # Proxy
 
@@ -485,26 +540,6 @@ class SettingsTab(QWidget):
         self._clear_cache_launch_chk.toggled.connect(self._on_clear_cache_launch_toggled)
         section.add_widget(self._clear_cache_launch_chk)
 
-        self._lock_roblox_files_chk = QCheckBox(
-            tr('ui.gui.settings_tab.lock_roblox_files_to_read_only')
-        )
-        self._lock_roblox_files_chk.setChecked(self._config.lock_roblox_files_read_only)
-        self._lock_roblox_files_chk.setToolTip(
-            tr('ui.gui.settings_tab.stops_roblox_from_overwriting_active_fleasion_modification')
-        )
-        self._lock_roblox_files_chk.toggled.connect(self._on_lock_roblox_files_toggled)
-        section.add_widget(self._lock_roblox_files_chk)
-
-        self._close_env_roblox_chk = QCheckBox(
-            tr('ui.gui.settings_tab.close_env_proxied_roblox_player_on_exit')
-        )
-        self._close_env_roblox_chk.setChecked(self._config.close_env_proxy_roblox_on_exit)
-        self._close_env_roblox_chk.setToolTip(
-            tr('ui.gui.settings_tab.roblox_player_and_supported_linux_clients_depend')
-        )
-        self._close_env_roblox_chk.toggled.connect(self._on_close_env_roblox_toggled)
-        section.add_widget(self._close_env_roblox_chk)
-
         self._run_on_boot_chk = QCheckBox(tr('ui.gui.settings_tab.run_on_boot'))
         self._run_on_boot_chk.setChecked(self._config.run_on_boot)
         self._run_on_boot_chk.toggled.connect(self._on_run_on_boot_toggled)
@@ -516,11 +551,6 @@ class SettingsTab(QWidget):
         self._desktop_integration_chk.setChecked(self._config.desktop_integration)
         self._desktop_integration_chk.toggled.connect(self._on_desktop_integration_toggled)
         section.add_widget(self._desktop_integration_chk)
-
-        self._close_scraped_games_chk = QCheckBox(tr('ui.gui.settings_tab.close_roblox_on_open'))
-        self._close_scraped_games_chk.setChecked(self._config.close_scraped_games_on_open)
-        self._close_scraped_games_chk.toggled.connect(self._on_close_scraped_games_toggled)
-        section.add_widget(self._close_scraped_games_chk)
 
         self._close_to_tray_chk = QCheckBox(tr('ui.gui.settings_tab.close_to_tray'))
         self._close_to_tray_chk.setChecked(self._config.close_to_tray)
@@ -623,50 +653,39 @@ class SettingsTab(QWidget):
     # Public
 
     def refresh_from_config(self):
-        """Re-read all settings from config and update widgets (no signals emitted)."""
-        for name, rb in self._theme_buttons.items():
-            rb.blockSignals(True)
-            rb.setChecked(name == self._config.theme)
-            rb.blockSignals(False)
+        """Re-read the visible settings from config and update widgets without signals."""
+        for name, checkbox in self._theme_buttons.items():
+            checkbox.blockSignals(True)
+            checkbox.setChecked(name == self._config.theme)
+            checkbox.blockSignals(False)
 
-        for chk, value in [
+        visible_checkboxes = [
             (self._open_dashboard_chk, self._config.open_dashboard_on_launch),
-            (self._proxy_features_chk, self._config.proxy_features_enabled),
-            (self._wire_preserving_chk, self._config.wire_preserving_passthrough),
             (self._auto_clear_cache_chk, self._config.auto_delete_cache_on_exit),
             (self._clear_cache_launch_chk, self._config.clear_cache_on_launch),
-            (self._lock_roblox_files_chk, self._config.lock_roblox_files_read_only),
-            (self._close_env_roblox_chk, self._config.close_env_proxy_roblox_on_exit),
             (self._run_on_boot_chk, self._config.run_on_boot),
             (self._desktop_integration_chk, self._config.desktop_integration),
-            (self._close_scraped_games_chk, self._config.close_scraped_games_on_open),
             (self._close_to_tray_chk, self._config.close_to_tray),
             (self._always_on_top_chk, self._config.always_on_top),
-            (
-                self._show_replacer_notifications_chk,
-                self._config.show_replacer_notifications,
-            ),
-            (self._close_viewer_on_replace_chk, self._config.close_viewer_on_replace),
-            (
-                self._close_scraped_games_menu_on_open_chk,
-                self._config.close_scraped_games_menu_on_open,
-            ),
-            (self._show_names_chk, self._config.show_names),
-            (self._show_creator_id_chk, self._config.show_creator_id),
-        ]:
-            chk.blockSignals(True)
-            chk.setChecked(value)
-            chk.blockSignals(False)
+        ]
+        for checkbox, value in visible_checkboxes:
+            checkbox.blockSignals(True)
+            checkbox.setChecked(bool(value))
+            checkbox.blockSignals(False)
 
-        idx = self._upstream_mode_combo.findData(self._config.upstream_transport_mode)
-        self._upstream_mode_combo.blockSignals(True)
-        self._upstream_mode_combo.setCurrentIndex(max(0, idx))
-        self._upstream_mode_combo.blockSignals(False)
+        settings = getattr(self._config, 'settings', {})
+        settings = settings if isinstance(settings, dict) else {}
+        probe_enabled = bool(settings.get('show_cache_probe_header', False))
+        self._probe_header_tools_chk.blockSignals(True)
+        self._probe_header_tools_chk.setChecked(probe_enabled)
+        self._probe_header_tools_chk.blockSignals(False)
 
-        idx = self._proxy_mode_combo.findData(self._config.proxy_mode)
-        self._proxy_mode_combo.blockSignals(True)
-        self._proxy_mode_combo.setCurrentIndex(max(0, idx))
-        self._proxy_mode_combo.blockSignals(False)
+        preview_enabled = bool(settings.get('asset_database_preview_enabled', True))
+        self._asset_database_preview_chk.blockSignals(True)
+        self._asset_database_preview_chk.setChecked(preview_enabled)
+        self._asset_database_preview_chk.blockSignals(False)
+        self.probe_header_visibility_changed.emit(probe_enabled)
+        self.asset_database_preview_visibility_changed.emit(preview_enabled)
 
         if sys.platform.startswith('linux'):
             idx = self._linux_client_combo.findData(getattr(self._config, 'linux_client', 'auto'))
@@ -675,37 +694,6 @@ class SettingsTab(QWidget):
             self._linux_client_combo.blockSignals(False)
             self._refresh_linux_client_status()
 
-        for widget, value in [
-            (self._http_proxy_host, self._config.upstream_http_connect_host),
-            (self._http_proxy_user, self._config.upstream_http_connect_username),
-            (self._http_proxy_pass, self._config.upstream_http_connect_password),
-            (self._socks5_host, self._config.upstream_socks5_host),
-            (self._socks5_user, self._config.upstream_socks5_username),
-            (self._socks5_pass, self._config.upstream_socks5_password),
-        ]:
-            widget.blockSignals(True)
-            widget.setText(value)
-            widget.blockSignals(False)
-
-        for widget, value in [
-            (self._http_proxy_port, self._config.upstream_http_connect_port),
-            (self._socks5_port, self._config.upstream_socks5_port),
-            (
-                self._asset_limit_spin,
-                self._config.vpn_compat_max_assetdelivery_connections,
-            ),
-            (self._cdn_limit_spin, self._config.vpn_compat_max_cdn_connections),
-        ]:
-            widget.blockSignals(True)
-            widget.setValue(value)
-            widget.blockSignals(False)
-
-        self.set_cache_scraper_enabled(self._is_cache_scraper_enabled())
-
-        for option, chk in self._export_chks.items():
-            chk.blockSignals(True)
-            chk.setChecked(self._config.is_export_naming_enabled(option))
-            chk.blockSignals(False)
         if sys.platform == 'darwin':
             idx = self._macos_auth_source_combo.findData(self._config.macos_auth_source)
             self._macos_auth_source_combo.blockSignals(True)
@@ -979,7 +967,14 @@ class SettingsTab(QWidget):
         self._sync_manual_proxy_credentials_timer()
 
     def _selected_manual_proxy_has_credentials(self) -> bool:
-        mode = self._upstream_mode_combo.currentData()
+        # Proxy transport controls are intentionally not built in the local-cache
+        # focused UI. Treat the missing selector as "no manual proxy selected",
+        # rather than crashing during SettingsTab startup.
+        mode_combo = getattr(self, '_upstream_mode_combo', None)
+        if mode_combo is None:
+            return True
+
+        mode = mode_combo.currentData()
         if mode == 'http_connect':
             return bool(self._http_proxy_user.text().strip() or self._http_proxy_pass.text())
         if mode == 'socks5':
@@ -1203,9 +1198,12 @@ class SettingsTab(QWidget):
         return False
 
     def set_cache_scraper_enabled(self, enabled: bool):
-        self._cache_scraper_chk.blockSignals(True)
-        self._cache_scraper_chk.setChecked(enabled)
-        self._cache_scraper_chk.blockSignals(False)
+        checkbox = getattr(self, '_cache_scraper_chk', None)
+        if checkbox is None:
+            return
+        checkbox.blockSignals(True)
+        checkbox.setChecked(enabled)
+        checkbox.blockSignals(False)
 
     def _on_cache_scraper_toggled(self, checked: bool):
         if self._tray and hasattr(self._tray, '_set_cache_scraper_enabled'):

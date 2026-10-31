@@ -1,16 +1,14 @@
 > [!IMPORTANT]
-> Btw everything is happening in the branches rn when it's done i will push it
-> 
-> Roblox has patched the original Fleasion, and its proxy functionality currently does not work. **Fleasion-db** is a community-driven fork focused on improving asset previews, animation tools, external asset importing, and cache management.
+> **Fleasion-db is an unofficial community fork of [Fleasion](https://github.com/fleasion/Fleasion).** This branch defaults to local SQLite database inspection and editing. Proxy interception is disabled by default; the upstream proxy functionality has been patched, and no confirmed ETA for an upstream fix is available.
 >
-> These improvements do not automatically restore the patched proxy functionality. There is **no confirmed ETA** for a fix.
+> The local database editor is independent of the proxy. It opens SQLite files read-only first, supports table browsing and SQL queries, and creates a verified backup before any enabled write. It does not guarantee that Roblox will accept arbitrary database edits.
 
 > [!CAUTION]
-> Official Fleasion downloads are published only on this repository's [Releases](https://github.com/fleasion/Fleasion/releases) page. The official website is [fleasion.github.io](https://fleasion.github.io/), and the official community is our [Discord server](https://discord.gg/hXyhKehEZF).
+> This is not the official Fleasion project. Upstream information and releases are available at [fleasion/Fleasion](https://github.com/fleasion/Fleasion). Builds and changes in this fork are maintained separately.
 
-# Fleasion
+# Fleasion-db
 
-Fleasion replaces Roblox game assets in real time on Windows, macOS and Linux (Sober). It runs a local proxy between Roblox and its servers, so you can swap textures, audio, meshes, animations and other assets before they reach the game client.
+Fleasion-Extended keeps Fleasion's existing Qt interface and asset preview tools while adding a local database workspace. The goal of the CacheSwap branch is to inspect and modify local Roblox SQLite databases directly, rather than depend on network interception for this workflow.
 
 For help or content requests, join our Discord server.
 
@@ -20,9 +18,9 @@ For help or content requests, join our Discord server.
 
 ## Installation
 
-Download the latest build from the [Releases](https://github.com/fleasion/Fleasion/releases) page. Python is not required.
+This branch is under development. There may not be a published binary for the latest changes yet.
 
-To run Fleasion from source, build it, or contribute code, see [CONTRIBUTING.md](CONTRIBUTING.md).
+For development, use Python 3.14 and the project's `uv` setup described in [CONTRIBUTING.md](CONTRIBUTING.md). The current branch changes the SQLite editor, startup defaults, and dashboard wiring, so test it against a copy of any database before using it on real Roblox data.
 
 <details>
 <summary><b>Troubleshooting installation</b></summary>
@@ -37,19 +35,42 @@ To run Fleasion from source, build it, or contribute code, see [CONTRIBUTING.md]
 
 </details>
 
-## Usage
+## Usage: local databases
 
-1. **Launch Fleasion.**
-2. **Add replacements** in the Replacer tab.
-3. **Clear the cache** whenever you change replacements, so Roblox downloads the assets again through the proxy.
-4. **Launch Roblox.** Its traffic will go through the proxy.
+1. Launch Fleasion-Extended. The dashboard opens on **Local DB**.
+2. Open a standard SQLite file directly, or choose a folder and click **Find databases**.
+3. Select a table to inspect its columns and rows. The Schema tab shows the column definition and CREATE statement.
+4. The SQL tab starts in read-only mode and accepts bounded `SELECT`, `WITH` and `EXPLAIN` queries.
+5. To edit one cell, enable cell editing and confirm each save. To execute write SQL, enable **Enable write SQL…** and confirm the warning. Each write creates and integrity-checks a backup under `FleasionNT/DatabaseBackups`.
 
-> [!NOTE]
-> After changing anything in the Dashboard, clear your Roblox cache or restart Roblox. Fleasion can do this for you:
->
-> - **Clear Cache on Launch** (on by default) closes Roblox and deletes `rbx-storage.db` when the proxy starts.
-> - **Auto Delete Cache on Exit** (on by default) deletes the cache database when Roblox closes.
-> - You can also clear the cache manually from the tray menu.
+The fork defaults to proxy interception **off**, and automatic cache deletion on launch/exit is **off**. On the first launch after the local-database-mode migration is added, existing settings are migrated to those safer defaults. You can re-enable optional proxy features in Settings, but that does not make a patched proxy work.
+
+### Where to get a real test cache
+
+On Windows, press **Win+R** and enter `%LOCALAPPDATA%\Roblox`. This is the usual Roblox cache root. It can contain `rbx-storage.db`, the optional `rbx-storage.db-wal` and `rbx-storage.db-shm` sidecars, `rbx-storage.id`, and on some cache versions an `rbx-storage\` folder. Newer cache databases may keep the actual entry bytes directly in the `files.content` BLOB column, so the folder is not necessarily the only place where payloads live.
+
+**For your first test, make a copy before writing:**
+
+1. Completely exit Roblox Player and Studio (also check Task Manager for leftover Roblox processes). If using Sober, close that too.
+2. Copy the whole `%LOCALAPPDATA%\Roblox` folder to something like `%USERPROFILE%\Desktop\RobloxCacheTest`. Keep `rbx-storage.db` and any `-wal`/`-shm` sidecars together if they exist. Do not manually delete the WAL: it can contain committed transactions not yet checkpointed into the main database. SQLite's own backup API is preferred when making a standalone database copy.
+3. Open Fleasion-Extended → **Cache Slots**, set **Roblox cache root** to the copied `RobloxCacheTest` folder, then click **Scan cache**.
+4. Start with two entries of the same detected type. Swap source → target, verify the displayed file/content size and DB size, then click **Restore target**. Only try an import from a separate raw payload file after this basic round-trip succeeds.
+
+For a raw-payload import, use an asset file you own or exported from your own project—for example a model saved as `.rbxm`/`.rbxmx`, or a PNG, mesh, audio or font file. A cache export is a complete RBXH-wrapped entry, not a raw payload, and is intended for inspection rather than re-import through the raw-payload button.
+
+## Cache Slots: direct SQLite BLOB or file-backed replacement
+
+The **Cache Slots** dashboard tab works with Roblox's local `rbx-storage.db` and supports both entries stored in the `files.content` BLOB column and legacy entries stored as separate files under `rbx-storage/`. It operates locally and does not send replacement rules through the network proxy.
+
+1. Scan the Roblox cache root.
+2. Select a cache entry and set it as the target. Select a second entry as the source, or use **Import file → target** for a raw asset payload.
+3. Confirm the operation. For a BLOB-backed entry, Fleasion updates `files.content` and `files.size` in one SQLite transaction. For a file-backed entry, it replaces the physical file and updates its `files.size` metadata. Before either path it creates and integrity-checks a database backup and saves the original target bytes.
+4. Use **Restore target** or **Restore ALL** to revert entries saved in the swap manifest. **Export entry** saves the full cached bytes plus a diagnostic report, and **Probe header** reports whether RBXH payload-length fields can be proven from real samples.
+
+External payload import is refused when Fleasion cannot confirm the cache header's payload-length field positions from enough existing entries. A full RBXH-wrapped cache entry is not accepted as a raw payload; select the cache entry itself as the source instead. Writes are blocked when Roblox Player, Studio or Sober is detected running.
+
+> [!WARNING]
+> Editing a Roblox cache database is unsupported by Roblox and can make cached assets inconsistent. Close Roblox Player, Studio and Sober before writing to its cache. The editor blocks detected client processes, but always test on a copy and keep backups. Editing arbitrary SQL rows does not automatically update related payload files. Use Cache Slots for supported whole-entry replacements so the file and its `files.size` metadata are updated together.
 
 <details>
 <summary><b>System tray</b></summary>
@@ -77,9 +98,9 @@ Env Proxy launches at boot never ask for administrator access. In Hosts File mod
 
 </details>
 
-## How it works
+## Optional legacy proxy functionality
 
-Fleasion runs a lightweight HTTPS proxy on your machine and supports two routing modes. When Roblox requests assets, Fleasion can:
+The upstream Fleasion architecture uses a lightweight HTTPS proxy with two routing modes. This code is retained for compatibility, but proxy interception is disabled by default in Fleasion-Extended and may not currently work with Roblox. Treat these details as architecture documentation, not a claim that proxy replacement is operational. When the proxy is functioning and explicitly enabled, it can:
 
 - **Replace** assets by ID, swapping one texture, sound or model for another.
 - **Remove** assets, such as stripping textures from a request entirely.
@@ -91,7 +112,7 @@ Everything happens locally on your machine.
 <details>
 <summary><b>Proxy modes</b></summary>
 
-- **Roblox Env Proxy** (default) listens on the loopback port `58443` and relaunches Roblox Player with proxy environment variables. If Windows has reserved that port, Fleasion picks another free loopback port automatically. This mode does not change your hosts file or use port 443. Roblox Player's `ssl/cacert.pem` still receives Fleasion's local CA so the Player trusts the intercepted traffic.
+- **Roblox Env Proxy** (optional; disabled by default in this fork) listens on the loopback port `58443` and relaunches Roblox Player with proxy environment variables. If Windows has reserved that port, Fleasion picks another free loopback port automatically. This mode does not change your hosts file or use port 443. Roblox Player's `ssl/cacert.pem` still receives Fleasion's local CA so the Player trusts the intercepted traffic.
   - Microsoft Store and Xbox (GDK) Roblox is started through package aware activation with a scoped environment. If that is not available, Fleasion leaves the client alone and reports it instead of relaunching it.
   - Roblox Studio is never relaunched, intercepted, patched or closed in this mode.
 - **Hosts File** is the older compatibility mode. It points the intercepted Roblox hosts to localhost and uses port 443, so it still needs administrator access or the platform helper.
@@ -134,6 +155,19 @@ Client paths, launch behavior, process detection and proxy support all go throug
 > **VPNs:** Env Proxy only affects the Roblox Player process and normally works alongside a VPN. Hosts File mode only works if your VPN respects the local hosts file.
 >
 > **Roblox rules:** asset replacement happens on your client, so only you see the changes. There are no known detections or reported bans for local asset replacement at the time of writing, but Roblox does not allow these modifications and game moderators may still take action. Use your own judgment.
+
+## Local SQLite database editor (CacheSwap branch)
+
+The CacheSwap branch adds **Local SQLite DB Editor…** to the existing Fleasion system-tray menu. It is an experimental local database browser/editor, not another proxy implementation.
+
+- Open one `.db`, `.sqlite`, `.sqlite3` or `.db3` file directly, or scan a chosen folder for SQLite files.
+- Inspect table/view names, column schemas, CREATE statements and paginated rows.
+- Run bounded read-only `SELECT`, `WITH` and `EXPLAIN` queries (maximum 500 result rows, with a time limit).
+- Browse in read-only mode by default. After explicitly enabling editing, change individual cells or export/replace BLOB values.
+- Every cell write creates and integrity-checks a backup using SQLite's backup API under `FleasionNT/DatabaseBackups`.
+- Writes to the Roblox cache database are blocked when Roblox Player, Studio or Sober is detected running. Close the client before editing its cache.
+
+**Important limits:** this feature edits SQLite rows directly; it does not automatically rewrite related cache payload files or guarantee that Roblox will accept a changed cache entry. Use a backup and test on a copy first. If a database is locked, encrypted, non-SQLite, or uses an unsupported schema, the editor may not be able to open or safely edit it. The SQL console is intentionally read-only; modifications go through the backed-up cell editor.
 
 ## Features
 

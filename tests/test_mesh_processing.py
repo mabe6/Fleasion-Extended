@@ -136,3 +136,16 @@ def test_v7_rejects_a_mismatched_draco_length(monkeypatch):
     data = b'version 7.00\n' + _chunk('COREMESH', 2, coremesh)
 
     assert mesh_processing.convert(data) is None
+
+
+
+def test_mesh_detection_rejects_short_version_prefix_and_asset_metadata():
+    assert not mesh_processing.is_mesh_data(b'version 1.00\n')
+    assert not mesh_processing.is_mesh_data(b'roblox-assettypeid: 1\r\n')
+
+
+def test_mesh_detection_validates_version_one_geometry_and_gzip():
+    assert mesh_processing.is_mesh_data(EARLY_MESH)
+    assert mesh_processing.is_mesh_data(gzip.compress(EARLY_MESH))
+    assert not mesh_processing.is_mesh_data(b'version 1.00\n1\nnot-json')
+

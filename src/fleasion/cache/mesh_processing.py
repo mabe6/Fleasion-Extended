@@ -606,12 +606,113 @@ def _mesh_header(data: bytes) -> str:
     return data[:12].decode('utf-8', errors='ignore').strip()
 
 
+def _decompress_mesh_data(data: bytes) -> bytes | None:
+    if data.startswith(b'\x1f\x8b'):
+        try:
+            return gzip.decompress(data)
+        except (OSError, EOFError):
+            return None
+    return data
+
+
+def _valid_v1_mesh(data: bytes) -> bool:
+    try:
+        lines = data.decode('utf-8', errors='strict').splitlines()
+        if len(lines) < 3 or lines[0].strip() not in {'version 1.00', 'version 1.01'}:
+            return False
+        face_count = int(lines[1].strip())
+        content = json.loads('[' + lines[2].replace('][', '],[') + ']')
+    except (UnicodeDecodeError, ValueError, json.JSONDecodeError):
+        return False
+    if face_count <= 0 or face_count > 2_000_000 or len(content) != face_count * 9:
+        return False
+    for value in content:
+        if not isinstance(value, list) or len(value) != 3:
+            return False
+        if not all(isinstance(component, (int, float)) for component in value):
+            return False
+    return True
+
+
+def _valid_v2_to_v5_mesh(data: bytes, version: str) -> bool:
+    if len(data) < 25:
+        return False
+    offset = 13
+    try:
+        header_size = struct.unpack_from('<H', data, offset)[0]
+        if header_size < 12 or offset + header_size > len(data):
+            return False
+        if version in {'2.00', '3.00', '3.01'}:
+            vertex_size = struct.unpack_from('<B', data, offset + 2)[0]
+            if vertex_size not in {36, 40}:
+                return False
+            if version == '2.00':
+                vertex_count = struct.unpack_from('<I', data, offset + 4)[0]
+                face_count = struct.unpack_from('<I', data, offset + 8)[0]
+            else:
+                vertex_count = struct.unpack_from('<I', data, offset + 8)[0]
+                face_count = struct.unpack_from('<I', data, offset + 12)[0]
+            skinning_size = 0
+        else:
+            vertex_size = 40
+            vertex_count = struct.unpack_from('<I', data, offset + 4)[0]
+            face_count = struct.unpack_from('<I', data, offset + 8)[0]
+            bone_count = struct.unpack_from('<H', data, offset + 14)[0]
+            skinning_size = vertex_count * 8 if bone_count else 0
+        if vertex_count <= 0 or face_count <= 0:
+            return False
+        if vertex_count > 2_000_000 or face_count > 2_000_000:
+            return False
+        body_start = offset + header_size
+        minimum_end = body_start + vertex_count * vertex_size + skinning_size + face_count * 12
+        return minimum_end <= len(data)
+    except (struct.error, OverflowError, ValueError):
+        return False
+
+
+def _valid_chunked_mesh(data: bytes, version: str) -> bool:
+    try:
+        chunks = _read_chunked_mesh(data)
+        coremesh = next(
+            (
+                (chunk_version, chunk_data)
+                for name, chunk_version, chunk_data in chunks
+                if name == 'COREMESH'
+            ),
+            None,
+        )
+        if coremesh is None:
+            return False
+        coremesh_version, coremesh_data = coremesh
+        if version == 'version 6.00' and coremesh_version == 1:
+            vertices, faces = _read_raw_coremesh(coremesh_data)
+            return bool(vertices and faces)
+        if version == 'version 7.00' and coremesh_version == 2:
+            if len(coremesh_data) < 9:
+                return False
+            draco_size = struct.unpack_from('<I', coremesh_data, 0)[0]
+            return draco_size == len(coremesh_data) - 4 and coremesh_data[4:9] == b'DRACO'
+    except (ValueError, struct.error, OverflowError):
+        return False
+    return False
+
+
 def is_mesh_data(data: bytes) -> bool:
-    """Return True when bytes look like a Roblox mesh payload."""
+    """Return True only when the Roblox mesh header and minimum structure are valid."""
     if not data or len(data) < 12:
         return False
-    header = _mesh_header(data)
-    return any(header.startswith(prefix) for prefix in SUPPORTED_MESH_HEADERS)
+    decoded = _decompress_mesh_data(data)
+    if decoded is None or len(decoded) < 12:
+        return False
+    header = _mesh_header(decoded)
+    if header.startswith('version 1.'):
+        return _valid_v1_mesh(decoded)
+    if header in {'version 2.00', 'version 3.00', 'version 3.01',
+                  'version 4.00', 'version 4.01', 'version 5.00'}:
+        return _valid_v2_to_v5_mesh(decoded, header.split()[1])
+    if header in {'version 6.00', 'version 7.00'}:
+        return _valid_chunked_mesh(decoded, header)
+    return False
 
 
 # Main Conversion Function
@@ -633,6 +734,11 @@ def convert(data: bytes, output_path: str = None) -> str:
         except Exception as e:
             log_buffer.log('Mesh', f'Failed to decompress gzip mesh data: {e}')
             return None
+    # Validate structure before handing data to format parsers or native Draco
+    if not is_mesh_data(data):
+        log_buffer.log('Mesh', 'Rejected malformed or truncated mesh payload')
+        return None
+
     # Detect version from header
     header = _mesh_header(data)
     log_buffer.log('Mesh', f'Detected mesh version: {header}')

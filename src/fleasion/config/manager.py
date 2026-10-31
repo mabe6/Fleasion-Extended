@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 from ..utils.paths import CONFIG_DIR, CONFIG_FILE, CONFIGS_FOLDER
+from ..local_database_mode import DEFAULT_DATABASE_MODE_SETTINGS
 
 # Windows forbids these characters in file and folder names.
 _INVALID_FILENAME_CHARS = frozenset('\\/:*?"<>|')
@@ -259,10 +260,9 @@ DEFAULT_SETTINGS = {
     'audio_volume': 70,  # 0-100
     'always_on_top': False,
     'open_dashboard_on_launch': True,
+    'asset_database_preview_enabled': True,
     'first_time_setup_complete': False,
-    'auto_delete_cache_on_exit': True,
-    'clear_cache_on_launch': True,
-    'proxy_features_enabled': True,
+    **DEFAULT_DATABASE_MODE_SETTINGS,
     'proxy_mode': 'env',
     # Linux client selection is registry-backed. Sober is the only registered
     # implementation today; ``auto`` leaves room for future backends.
@@ -873,7 +873,7 @@ class ConfigManager:
     @property
     def proxy_features_enabled(self) -> bool:
         """Get proxy feature toggle."""
-        return self.settings.get('proxy_features_enabled', True)
+        return self.settings.get('proxy_features_enabled', False)
 
     @proxy_features_enabled.setter
     def proxy_features_enabled(self, value: bool):

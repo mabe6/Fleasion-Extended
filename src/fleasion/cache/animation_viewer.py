@@ -429,67 +429,103 @@ def load_animation_from_xml(anim_data: bytes) -> List[Keyframe]:
     return keys
 
 
+def _instance_property_value(instance, name: str, default=None):
+    """Read properties from either the lightweight or full RBXM deserializer."""
+    properties = getattr(instance, 'properties', {})
+    value = properties.get(name, default) if isinstance(properties, dict) else default
+    # The full serializer stores RbxProperty wrappers; the lightweight parser
+    # exposes already-unwrapped scalar/dict values.
+    return getattr(value, 'value', value)
+
+
 def load_animation_from_rbxm(anim_data: bytes) -> List[Keyframe]:
-    """Load animation from binary RBXM format."""
+    """Load KeyframeSequence data from binary RBXM.
+
+    Prefer the lightweight LZ4 parser for compatibility, then fall back to the
+    full document deserializer, which also supports Zstandard-compressed chunks.
+    """
+    instances = None
+    legacy_error = None
     try:
         from .rbxm_parser import find_by_class, parse_rbxm
-    except ImportError:
-        log_buffer.log('AnimationViewer', 'RBXM parser not available')
-        return []
 
-    try:
         instances = parse_rbxm(anim_data)
-
-        # Find all Keyframe instances
         keyframe_instances = find_by_class(instances, 'Keyframe')
-
-        if not keyframe_instances:
-            log_buffer.log('AnimationViewer', 'No Keyframe instances found in RBXM')
-            return []
-
         keys: List[Keyframe] = []
-
         for kf_inst in keyframe_instances:
-            # Get keyframe time
-            time_val = kf_inst.properties.get('Time', 0.0)
-            if isinstance(time_val, (int, float)):
-                t = float(time_val)
-            else:
-                t = 0.0
-
-            # Find all Pose children (recursively)
+            time_val = _instance_property_value(kf_inst, 'Time', 0.0)
+            t = float(time_val) if isinstance(time_val, (int, float)) else 0.0
             poses: Dict[str, np.ndarray] = {}
             _collect_poses(kf_inst, poses)
-
             if poses:
                 keys.append(Keyframe(t, poses))
+        if keys:
+            keys.sort(key=lambda key: key.time)
+            return keys
+    except Exception as exc:
+        legacy_error = exc
 
-        keys.sort(key=lambda k: k.time)
-        return keys
+    try:
+        from .tools.solidmodel_converter.rbxm.deserializer import RbxmDeserializer
 
-    except Exception as e:
-        log_buffer.log('AnimationViewer', f'Error parsing RBXM animation: {e}')
+        document = RbxmDeserializer().deserialize(anim_data)
+        keyframe_instances = [
+            instance
+            for instance in document.instances.values()
+            if instance.class_name == 'Keyframe'
+        ]
+        keys = []
+        for kf_inst in keyframe_instances:
+            time_val = _instance_property_value(kf_inst, 'Time', 0.0)
+            t = float(time_val) if isinstance(time_val, (int, float)) else 0.0
+            poses: Dict[str, np.ndarray] = {}
+            _collect_poses(kf_inst, poses)
+            if poses:
+                keys.append(Keyframe(t, poses))
+        keys.sort(key=lambda key: key.time)
+        if keys:
+            return keys
+        log_buffer.log('AnimationViewer', 'No playable Keyframe/Pose tracks found in RBXM')
+    except Exception as exc:
+        log_buffer.log(
+            'AnimationViewer',
+            f'Full RBXM deserializer failed: {type(exc).__name__}: {exc}',
+        )
+        if legacy_error is not None:
+            log_buffer.log(
+                'AnimationViewer',
+                f'Legacy RBXM parser also failed: {type(legacy_error).__name__}: {legacy_error}',
+            )
         import traceback
 
         log_buffer.log('AnimationViewer', traceback.format_exc())
-        return []
+    return []
 
 
 def _collect_poses(instance, poses: Dict[str, np.ndarray]):
-    """Recursively collect Pose instances from a Keyframe."""
+    """Recursively collect Pose instances from either RBXM deserializer."""
     for child in instance.children:
         if child.class_name == 'Pose':
-            name = child.properties.get('Name', '')
-            cframe = child.properties.get('CFrame')
-            weight = child.properties.get('Weight', 1.0)
+            name = _instance_property_value(child, 'Name', '')
+            cframe = _instance_property_value(child, 'CFrame')
+            weight = _instance_property_value(child, 'Weight', 1.0)
 
-            if name and cframe and isinstance(weight, (int, float)) and weight > 0:
-                # CFrame is a dict with 'position' and 'rotation'
-                pos = cframe.get('position', (0, 0, 0))
-                rot = cframe.get('rotation', [1, 0, 0, 0, 1, 0, 0, 0, 1])
-                poses[name] = mat_from_cframe(pos, rot)
+            if name and isinstance(cframe, dict) and isinstance(weight, (int, float)) and weight > 0:
+                # The lightweight parser uses position/rotation keys; the full
+                # reader uses Roblox's X/Y/Z/R00..R22 matrix fields.
+                if 'position' in cframe:
+                    pos = cframe.get('position', (0, 0, 0))
+                    rot = cframe.get('rotation', [1, 0, 0, 0, 1, 0, 0, 0, 1])
+                else:
+                    pos = (cframe.get('X', 0), cframe.get('Y', 0), cframe.get('Z', 0))
+                    rot = [
+                        cframe.get('R00', 1), cframe.get('R01', 0), cframe.get('R02', 0),
+                        cframe.get('R10', 0), cframe.get('R11', 1), cframe.get('R12', 0),
+                        cframe.get('R20', 0), cframe.get('R21', 0), cframe.get('R22', 1),
+                    ]
+                poses[str(name)] = mat_from_cframe(pos, rot)
 
-            # Recursively check for nested poses
+            # Pose trees may contain nested joints.
             _collect_poses(child, poses)
 
 
@@ -572,13 +608,34 @@ def load_curve_animation_data(anim_data: bytes) -> List[Keyframe]:
             return None
 
         def _vat_rbxm(inst):
+            import base64 as _base64
+
             for k, v in inst.properties.items():
                 pk = k.name if hasattr(k, 'name') else str(k)
                 if pk == 'ValuesAndTimes':
                     raw = v.value if hasattr(v, 'value') else v
-                    if raw:
-                        rb = raw.encode('latin-1') if isinstance(raw, str) else bytes(raw)
-                        return _vat(rb)
+                    if not raw:
+                        continue
+                    candidates: list[bytes] = []
+                    if isinstance(raw, str):
+                        try:
+                            candidates.append(raw.encode('latin-1'))
+                        except UnicodeEncodeError:
+                            candidates.append(raw.encode('utf-8', errors='replace'))
+                        # Some Roblox/XML serializers retain a base64 text value
+                        # rather than the decoded BinaryString blob.
+                        try:
+                            decoded = _base64.b64decode(raw, validate=True)
+                            if decoded not in candidates:
+                                candidates.append(decoded)
+                        except Exception:
+                            pass
+                    else:
+                        candidates.append(bytes(raw))
+                    for candidate in candidates:
+                        values = _vat(candidate)
+                        if values:
+                            return values
             return []
 
         def _walk_rbxm(inst):
@@ -706,6 +763,25 @@ def load_curve_animation_data(anim_data: bytes) -> List[Keyframe]:
                 _walk_xml(item)
                 break
 
+    if not bone_curves and anim_data.startswith(b'<roblox!'):
+        # Some binary RBXM variants store ValuesAndTimes as a byte string that
+        # the generic property reader decodes as text. Re-emit the already
+        # parsed document as RBXMX so the XML path can safely base64-decode the
+        # binary property and reuse the well-tested curve reader.
+        try:
+            from .tools.solidmodel_converter.rbxm.xml_writer import write_rbxmx
+
+            xml_payload = write_rbxmx(tree)
+            if xml_payload:
+                xml_keys = load_curve_animation_data(xml_payload)
+                if xml_keys:
+                    return xml_keys
+        except Exception as exc:
+            log_buffer.log(
+                'AnimationViewer',
+                f'CurveAnimation binary-to-XML fallback failed: {type(exc).__name__}: {exc}',
+            )
+
     if not bone_curves:
         log_buffer.log('AnimationViewer', 'CurveAnimation: no bone curves found')
         return []
@@ -743,21 +819,35 @@ def load_curve_animation_data(anim_data: bytes) -> List[Keyframe]:
 
 def load_animation_data(anim_data: bytes) -> List[Keyframe]:
     """Load animation from either XML or binary RBXM format."""
-    # CurveAnimation has a distinct structure - try it first
-    if b'CurveAnimation' in anim_data:
+    # Strip UTF-8 BOM for format detection (Roblox Studio emits BOM-prefixed RBXMX).
+    _detect = anim_data[3:] if anim_data[:3] == b'\xef\xbb\xbf' else anim_data
+
+    # CurveAnimation has a distinct structure. In binary RBXM, its class name
+    # may live inside a compressed INST chunk and therefore not appear in a
+    # direct byte search.
+    has_curve_animation = b'CurveAnimation' in anim_data
+    if _detect.startswith(b'<roblox!') and not has_curve_animation:
+        try:
+            from .tools.solidmodel_converter.rbxm.deserializer import RbxmDeserializer
+
+            document = RbxmDeserializer().deserialize(anim_data)
+            has_curve_animation = any(
+                instance.class_name == 'CurveAnimation'
+                for instance in document.instances.values()
+            )
+        except Exception:
+            pass
+
+    if has_curve_animation:
         keys = load_curve_animation_data(anim_data)
         if keys:
             return _fill_sparse_pose_tracks(keys)
 
-    # Strip UTF-8 BOM for format detection (Roblox Studio emits BOM-prefixed RBXMX)
-    _detect = anim_data[3:] if anim_data[:3] == b'\xef\xbb\xbf' else anim_data
-
-    # Try to detect format
     if _detect.startswith(b'<roblox!'):
-        # Binary RBXM format
+        # Binary KeyframeSequence RBXM format.
         keys = load_animation_from_rbxm(anim_data)
     elif _detect.strip().startswith(b'<'):
-        # XML format
+        # XML RBXMX format.
         keys = load_animation_from_xml(anim_data)
     else:
         keys = load_animation_from_xml(anim_data)

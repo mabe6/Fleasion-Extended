@@ -153,6 +153,8 @@ class RbxmPreviewWidget(QWidget):
         self.document: PreviewDocument | None = None
         self._item_to_instance: dict[int, PreviewInstance] = {}
         self._instance_to_item: dict[int, QTreeWidgetItem] = {}
+        self._lazy_tree_enabled = False
+        self._lazy_items_pending: set[int] = set()
         self._matches: list[QTreeWidgetItem] = []
         self._match_index = -1
         self._dirty = False
@@ -190,9 +192,9 @@ class RbxmPreviewWidget(QWidget):
         self.next_btn.clicked.connect(self._next_match)
         toolbar.addWidget(self.next_btn)
 
-        expand_btn = QPushButton(tr('ui.cache.rbxm_preview.expand_all'))
-        expand_btn.clicked.connect(self.tree_expand_all)
-        toolbar.addWidget(expand_btn)
+        self.expand_btn = QPushButton(tr('ui.cache.rbxm_preview.expand_all'))
+        self.expand_btn.clicked.connect(self.tree_expand_all)
+        toolbar.addWidget(self.expand_btn)
 
         collapse_btn = QPushButton(tr('ui.cache.rbxm_preview.collapse_all'))
         collapse_btn.clicked.connect(self.tree_collapse_all)
@@ -217,6 +219,7 @@ class RbxmPreviewWidget(QWidget):
         left_layout.setSpacing(4)
 
         self.tree = QTreeWidget()
+        left_layout.addWidget(QLabel("Model hierarchy"))
         self.tree.setHeaderHidden(True)
         self.tree.setIndentation(10)
         self.tree.setSelectionMode(QTreeWidget.SelectionMode.SingleSelection)
@@ -226,6 +229,7 @@ class RbxmPreviewWidget(QWidget):
         )
         self.tree.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.tree.currentItemChanged.connect(self._on_tree_selection_changed)
+        self.tree.itemExpanded.connect(self._on_tree_item_expanded)
         self.tree.itemChanged.connect(self._on_tree_item_changed)
         self.tree.customContextMenuRequested.connect(self._show_tree_context_menu)
         self.tree.viewport().installEventFilter(self)
@@ -245,6 +249,7 @@ class RbxmPreviewWidget(QWidget):
         right_layout = QVBoxLayout(right_pane)
         right_layout.setContentsMargins(0, 0, 0, 0)
         right_layout.setSpacing(4)
+        right_layout.addWidget(QLabel("Selected object properties"))
         self.properties_table = QTableWidget()
         self.properties_table.setColumnCount(3)
         self.properties_table.setHorizontalHeaderLabels(
@@ -294,27 +299,33 @@ class RbxmPreviewWidget(QWidget):
         right_layout.addLayout(right_bottom)
         splitter.addWidget(right_pane)
 
-        splitter.setSizes([220, 500])
+        splitter.setStretchFactor(0, 3)
+        splitter.setStretchFactor(1, 2)
+        splitter.setSizes([600, 400])
         layout.addWidget(splitter, stretch=1)
         self._update_type_column_visibility()
 
     def load_bytes(self, data: bytes, asset_label: str = '') -> None:
         """Load RBXM/RBXMX bytes into the preview."""
-        data = _decompress_if_needed(data)
-        self._dirty = False
-        self._asset_label = asset_label
-        if data.startswith(b'<roblox!'):
-            doc = self._load_binary(data)
-        elif data.lstrip().startswith(b'<roblox'):
-            doc = self._load_xml(data)
-        else:
-            raise ValueError('Data is not an RBXM/RBXMX document')
+        document = self.parse_document_bytes(data)
+        self.load_document(document, asset_label=asset_label, dirty=False)
 
-        self.document = doc
-        self._next_referent = self._compute_next_referent()
-        self._populate_tree(asset_label)
-        self._update_type_column_visibility()
-        self._set_dirty(False)
+    @staticmethod
+    def parse_document_bytes(data: bytes) -> PreviewDocument:
+        """Parse Roblox model bytes into UI-independent document data."""
+        data = _decompress_if_needed(data)
+        stripped = data.lstrip(b'\xef\\xbb\\xbf \\t\\r\\n')
+        if stripped.startswith(b'<roblox!'):
+            return RbxmPreviewWidget._load_binary(stripped)
+        if (
+            stripped.startswith(b'<roblox')
+            or (
+                stripped.startswith(b'<?xml')
+                and b'<roblox' in stripped[:2048]
+            )
+        ):
+            return RbxmPreviewWidget._load_xml(data)
+        raise ValueError('Data is not an RBXM/RBXMX document')
 
     def load_document(
         self, document: PreviewDocument, asset_label: str = '', dirty: bool = True
@@ -331,6 +342,8 @@ class RbxmPreviewWidget(QWidget):
         self.document = None
         self._item_to_instance.clear()
         self._instance_to_item.clear()
+        self._lazy_tree_enabled = False
+        self._lazy_items_pending.clear()
         self._matches.clear()
         self._match_index = -1
         self.tree.clear()
@@ -342,6 +355,14 @@ class RbxmPreviewWidget(QWidget):
         self._asset_label = ''
 
     def tree_expand_all(self):
+        if self._lazy_tree_enabled:
+            # Expanding every descendant at once defeats lazy loading on large models.
+            for index in range(self.tree.topLevelItemCount()):
+                self.tree.topLevelItem(index).setExpanded(True)
+            self.expand_btn.setToolTip(
+                'Large model: expand individual branches to load deeper levels'
+            )
+            return
         self.tree.expandAll()
 
     def tree_collapse_all(self):
@@ -358,7 +379,8 @@ class RbxmPreviewWidget(QWidget):
             self.properties_table.setRowCount(0)
         return super().eventFilter(source, event)
 
-    def _load_binary(self, data: bytes) -> PreviewDocument:
+    @staticmethod
+    def _load_binary(data: bytes) -> PreviewDocument:
         from .tools.solidmodel_converter.rbxm.deserializer import RbxmDeserializer
 
         raw_doc = RbxmDeserializer().deserialize(data)
@@ -391,7 +413,8 @@ class RbxmPreviewWidget(QWidget):
             raw_chunks=list(raw_doc.raw_chunks),
         )
 
-    def _load_xml(self, data: bytes) -> PreviewDocument:
+    @staticmethod
+    def _load_xml(data: bytes) -> PreviewDocument:
         root = ET.fromstring(data)
         shared_by_md5: dict[str, bytes] = {}
         shared_strings: list[bytes] = []
@@ -462,21 +485,99 @@ class RbxmPreviewWidget(QWidget):
             shared_strings=shared_strings,
         )
 
+    def animation_names(self) -> list[str]:
+        """Return named animation objects and folders that contain animation data."""
+        if self.document is None:
+            return []
+
+        animation_classes = {'Animation', 'KeyframeSequence', 'CurveAnimation'}
+        animation_data_classes = animation_classes | {'Keyframe', 'Pose'}
+        names: list[str] = []
+        seen: set[str] = set()
+
+        def add_name(value: str) -> None:
+            cleaned = str(value or '').strip()
+            if cleaned and cleaned.casefold() not in seen:
+                seen.add(cleaned.casefold())
+                names.append(cleaned)
+
+        def contains_animation_data(instance: PreviewInstance) -> bool:
+            if instance.class_name in animation_data_classes:
+                return True
+            return any(contains_animation_data(child) for child in instance.children)
+
+        def visit(instance: PreviewInstance) -> None:
+            if instance.class_name in animation_classes:
+                add_name(instance.name or instance.class_name)
+            elif instance.class_name == 'Folder' and instance.name:
+                if any(contains_animation_data(child) for child in instance.children):
+                    add_name(instance.name)
+            for child in instance.children:
+                visit(child)
+
+        for root in self.document.roots:
+            visit(root)
+        return names
+
+    def animation_paths(self) -> list[str]:
+        """Return animations using their full nested Folder path, without flattening names."""
+        if self.document is None:
+            return []
+
+        animation_classes = {'Animation', 'KeyframeSequence', 'CurveAnimation', 'MoodAnimation'}
+        paths: list[str] = []
+        seen: set[str] = set()
+
+        def add_path(parts: list[str]) -> None:
+            cleaned = [str(part).strip() for part in parts if str(part).strip()]
+            if not cleaned:
+                return
+            value = ' / '.join(cleaned)
+            if value.casefold() not in seen:
+                seen.add(value.casefold())
+                paths.append(value)
+
+        def visit(instance: PreviewInstance, folders: list[str]) -> None:
+            current_folders = folders
+            if instance.class_name == 'Folder' and instance.name:
+                current_folders = [*folders, instance.name]
+            if instance.class_name in animation_classes:
+                add_path([*current_folders, instance.name or instance.class_name])
+            for child in instance.children:
+                visit(child, current_folders)
+
+        for root in self.document.roots:
+            visit(root, [])
+        return paths
+
     def _populate_tree(self, asset_label: str) -> None:
         self.tree.clear()
         self.properties_table.setRowCount(0)
         self._item_to_instance.clear()
         self._instance_to_item.clear()
+        self._lazy_items_pending.clear()
         self._matches.clear()
         self._match_index = -1
 
         if self.document is None:
+            self._lazy_tree_enabled = False
             return
 
-        for root in self.document.roots:
-            self._add_instance_item(None, root)
-
         instance_count = len(self.document.instances)
+        self._lazy_tree_enabled = instance_count > 1500
+        self.tree.setUpdatesEnabled(False)
+        self.tree.blockSignals(True)
+        try:
+            for root in self.document.roots:
+                self._add_instance_item(
+                    None,
+                    root,
+                    lazy_children=self._lazy_tree_enabled,
+                )
+        finally:
+            self.tree.blockSignals(False)
+            self.tree.setUpdatesEnabled(True)
+
         root_count = len(self.document.roots)
         shared_count = len(self.document.shared_strings)
         suffix = f' | {asset_label}' if asset_label else ''
@@ -489,15 +590,48 @@ class RbxmPreviewWidget(QWidget):
                 value3=suffix,
             )
         )
+        if self._lazy_tree_enabled:
+            self.summary_label.setText(
+                self.summary_label.text()
+                + ' · Large model: expand branches to load their children'
+            )
 
         if self.tree.topLevelItemCount():
-            first = self.tree.topLevelItem(0)
-            self.tree.setCurrentItem(first)
-            first.setExpanded(True)
+            if self._lazy_tree_enabled:
+                selected = self.tree.topLevelItem(0)
+            else:
+                # Prefer a real instance with stored properties for small documents.
+                def first_property_item(item: QTreeWidgetItem) -> QTreeWidgetItem | None:
+                    instance = self._item_to_instance.get(id(item))
+                    if instance is not None and instance.properties:
+                        return item
+                    for child_index in range(item.childCount()):
+                        found = first_property_item(item.child(child_index))
+                        if found is not None:
+                            return found
+                    return None
+
+                selected = None
+                for root_index in range(self.tree.topLevelItemCount()):
+                    selected = first_property_item(self.tree.topLevelItem(root_index))
+                    if selected is not None:
+                        break
+                if selected is None:
+                    selected = self.tree.topLevelItem(0)
+                parent = selected.parent()
+                while parent is not None:
+                    parent.setExpanded(True)
+                    parent = parent.parent()
+                selected.setExpanded(True)
+            self.tree.setCurrentItem(selected)
         self._on_search_changed(self.search_input.text())
 
     def _add_instance_item(
-        self, parent: QTreeWidgetItem | None, inst: PreviewInstance
+        self,
+        parent: QTreeWidgetItem | None,
+        inst: PreviewInstance,
+        *,
+        lazy_children: bool | None = None,
     ) -> QTreeWidgetItem:
         item = QTreeWidgetItem([inst.label()])
         item.setFlags(item.flags() | Qt.ItemFlag.ItemIsEditable)
@@ -512,9 +646,33 @@ class RbxmPreviewWidget(QWidget):
             self.tree.addTopLevelItem(item)
         else:
             parent.addChild(item)
-        for child in inst.children:
-            self._add_instance_item(item, child)
+
+        use_lazy = self._lazy_tree_enabled if lazy_children is None else lazy_children
+        if use_lazy and inst.children:
+            placeholder = QTreeWidgetItem([''])
+            placeholder.setFlags(Qt.ItemFlag.NoItemFlags)
+            item.addChild(placeholder)
+            self._lazy_items_pending.add(id(item))
+        else:
+            for child in inst.children:
+                self._add_instance_item(item, child, lazy_children=use_lazy)
         return item
+
+    def _on_tree_item_expanded(self, item: QTreeWidgetItem) -> None:
+        item_key = id(item)
+        if item_key not in self._lazy_items_pending:
+            return
+        self._lazy_items_pending.discard(item_key)
+        instance = self._item_to_instance.get(item_key)
+        if instance is None:
+            return
+        self.tree.setUpdatesEnabled(False)
+        try:
+            item.takeChildren()
+            for child in instance.children:
+                self._add_instance_item(item, child, lazy_children=True)
+        finally:
+            self.tree.setUpdatesEnabled(True)
 
     def _on_tree_selection_changed(
         self, current: QTreeWidgetItem | None, _previous: QTreeWidgetItem | None

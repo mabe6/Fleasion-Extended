@@ -320,6 +320,20 @@ class SystemTray:
         cache_action.triggered.connect(self._show_delete_cache)
         self.menu.addAction(cache_action)
 
+        database_editor_action = QAction('Advanced SQL…', self.menu)
+        database_editor_action.setToolTip(
+            'Inspect SQLite tables, schemas and SQL with verified backups'
+        )
+        database_editor_action.triggered.connect(self._show_sqlite_browser)
+        self.menu.addAction(database_editor_action)
+
+        asset_explorer_action = QAction('Scraper DB…', self.menu)
+        asset_explorer_action.setToolTip(
+            'Browse the local Roblox cache, inspect asset metadata and preview stored assets'
+        )
+        asset_explorer_action.triggered.connect(self._show_asset_explorer)
+        self.menu.addAction(asset_explorer_action)
+
         logs_action = QAction(tr('ui.tray.logs'), self.menu)
         logs_action.triggered.connect(self._show_logs)
         self.menu.addAction(logs_action)
@@ -1074,6 +1088,34 @@ class SystemTray:
             if sys.platform == 'darwin':
                 return
             self._toggle_dashboard()
+
+    def _show_sqlite_browser(self):
+        """Open the dashboard on Advanced SQL."""
+        self._show_replacer_config()
+        window = self.dashboard_window
+        if window is None:
+            return
+        editor_tab = getattr(window, '_advanced_sql_tab', None) or getattr(window, '_sqlite_browser_tab', None)
+        tab_widget = getattr(window, 'tab_widget', None)
+        if editor_tab is None or tab_widget is None:
+            return
+        tab_index = tab_widget.indexOf(editor_tab)
+        if tab_index >= 0:
+            tab_widget.setCurrentIndex(tab_index)
+
+    def _show_asset_explorer(self):
+        """Open the dashboard on Scraper DB."""
+        self._show_replacer_config()
+        window = self.dashboard_window
+        if window is None:
+            return
+        cache_tab = getattr(window, '_scraper_db_tab', None) or getattr(window, '_asset_explorer_tab', None)
+        tab_widget = getattr(window, 'tab_widget', None)
+        if cache_tab is None or tab_widget is None:
+            return
+        tab_index = tab_widget.indexOf(cache_tab)
+        if tab_index >= 0:
+            tab_widget.setCurrentIndex(tab_index)
 
     def _show_delete_cache(self):
         """Show Delete Cache window."""

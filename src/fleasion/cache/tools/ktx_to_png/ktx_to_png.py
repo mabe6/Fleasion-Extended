@@ -84,6 +84,76 @@ def strip_prefixed_ktx(data: bytes) -> bytes | None:
     return None
 
 
+def inspect_texture_metadata(data: bytes) -> dict[str, int | str] | None:
+    """Read KTX dimensions, array layers, cube faces and mip levels without decoding pixels."""
+    payload = strip_prefixed_ktx(data) or data
+    if payload[:12] == KTX2_MAGIC:
+        if len(payload) < 80:
+            return None
+        try:
+            (
+                vk_format,
+                type_size,
+                width,
+                height,
+                depth,
+                layers,
+                faces,
+                levels,
+                supercompression,
+            ) = struct.unpack_from('<9I', payload, 12)
+        except struct.error:
+            return None
+        if not width or not height:
+            return None
+        return {
+            'container': 'KTX2',
+            'width': width,
+            'height': height,
+            'depth': depth or 1,
+            'layers': layers or 1,
+            'faces': faces or 1,
+            'mip_levels': levels or 1,
+            'format': f'Vulkan format {vk_format}',
+            'type_size': type_size,
+            'supercompression': supercompression,
+        }
+
+    if payload[:12] == KTX1_MAGIC:
+        if len(payload) < 64:
+            return None
+        marker = struct.unpack_from('<I', payload, 12)[0]
+        endian = '<' if marker == 0x04030201 else '>' if marker == 0x01020304 else ''
+        if not endian:
+            return None
+        try:
+            gl_type, gl_type_size, gl_format, internal_format, _base_format = struct.unpack_from(
+                f'{endian}5I', payload, 16
+            )
+            width, height, depth, layers, faces, levels, key_value_bytes = struct.unpack_from(
+                f'{endian}7I', payload, 36
+            )
+        except struct.error:
+            return None
+        if not width or not height:
+            return None
+        return {
+            'container': 'KTX1',
+            'width': width,
+            'height': height,
+            'depth': depth or 1,
+            'layers': layers or 1,
+            'faces': faces or 1,
+            'mip_levels': levels or 1,
+            'format': f'GL format 0x{internal_format:04X}',
+            'type': gl_type,
+            'type_size': gl_type_size,
+            'pixel_format': gl_format,
+            'key_value_bytes': key_value_bytes,
+        }
+    return None
+
+
 # KTX1 -- header parsing + ETC/EAC dispatch
 # GL internal format constants (from KTX1/Main.cs KtxTextureFormat enum)
 _GL_RGB8_ETC1 = 0x8D64
@@ -101,6 +171,62 @@ _GL_SRGB8_ALPHA8_ETC2_EAC = 0x9279
 
 def _ceil_mul(value: int, multiplier: int) -> int:
     return ((value + multiplier - 1) // multiplier) * multiplier
+
+
+def _texture2ddecoder_png(
+    payload: bytes,
+    width: int,
+    height: int,
+    decoder_name: str,
+    *extra_args: int,
+) -> bytes | None:
+    """Decode a GPU-compressed texture through texture2ddecoder and return PNG bytes."""
+    try:
+        import texture2ddecoder
+
+        decoder = getattr(texture2ddecoder, decoder_name, None)
+        if decoder is None:
+            return None
+        decoded = decoder(payload, width, height, *extra_args)
+        if not isinstance(decoded, (bytes, bytearray)) or len(decoded) < width * height * 4:
+            return None
+        image = Image.frombytes('RGBA', (width, height), bytes(decoded), 'raw', 'BGRA')
+        buffer = io.BytesIO()
+        image.save(buffer, format='PNG')
+        return buffer.getvalue()
+    except Exception as exc:
+        logger.debug('ktx_to_png: %s decoder failed: %s', decoder_name, exc)
+        return None
+
+
+def _ktx1_extended_decoder(internal_fmt: int) -> tuple[str, tuple[int, ...]] | None:
+    """Map commonly used KTX1 OpenGL formats to an available block decoder."""
+    formats: dict[int, tuple[str, tuple[int, ...]]] = {
+        0x83F0: ('decode_bc1', ()),
+        0x83F1: ('decode_bc1', ()),
+        0x83F3: ('decode_bc3', ()),
+        0x8DBB: ('decode_bc4', ()),
+        0x8DBC: ('decode_bc4', ()),
+        0x8DBD: ('decode_bc5', ()),
+        0x8DBE: ('decode_bc5', ()),
+        0x8E8C: ('decode_bc7', ()),
+        0x8E8D: ('decode_bc7', ()),
+        0x8E8E: ('decode_bc6', ()),
+        0x8E8F: ('decode_bc6', ()),
+    }
+    astc_blocks = (
+        (0x93B0, 4, 4), (0x93B1, 5, 4), (0x93B2, 5, 5),
+        (0x93B3, 6, 5), (0x93B4, 6, 6), (0x93B5, 8, 5),
+        (0x93B6, 8, 6), (0x93B7, 8, 8), (0x93B8, 10, 5),
+        (0x93B9, 10, 6), (0x93BA, 10, 8), (0x93BB, 10, 10),
+        (0x93BC, 12, 10), (0x93BD, 12, 12),
+    )
+    if internal_fmt in formats:
+        return formats[internal_fmt]
+    for base, block_width, block_height in astc_blocks:
+        if internal_fmt in (base, base + 0x20):
+            return 'decode_astc', (block_width, block_height)
+    return None
 
 
 def _convert_ktx1(data: bytes) -> bytes | None:
@@ -148,7 +274,11 @@ def _convert_ktx1(data: bytes) -> bytes | None:
 
     rgba = _decode_ktx1(internal_fmt, image_data, width, height)
     if rgba is None:
-        return None
+        extended_decoder = _ktx1_extended_decoder(internal_fmt)
+        if extended_decoder is None:
+            return None
+        decoder_name, extra_args = extended_decoder
+        return _texture2ddecoder_png(image_data, real_width, real_height, decoder_name, *extra_args)
 
     # Crop to real dimensions
     img = Image.fromarray(rgba[:real_height, :real_width], 'RGBA')
@@ -717,6 +847,96 @@ def _decode_ktx2_etc(data: bytes) -> np.ndarray | None:
     return rgba
 
 
+def _decode_ktx2_extended(data: bytes) -> bytes | None:
+    """Decode common Vulkan BC/EAC/ASTC KTX2 formats not handled by the built-in ETC path."""
+    if len(data) < _KTX2_HEADER_SIZE + _KTX2_LEVEL_INDEX_ENTRY_SIZE:
+        return None
+    try:
+        (
+            vk_format, type_size, width, height, depth, layer_count, face_count,
+            level_count, supercompression,
+        ) = struct.unpack_from('<9I', data, 12)
+        level_offset, byte_length, uncompressed_length = struct.unpack_from(
+            '<QQQ', data, _KTX2_HEADER_SIZE
+        )
+    except struct.error:
+        return None
+
+    block_format_map: dict[int, tuple[str, int, int, int]] = {}
+    for fmt in (131, 132, 133, 134):
+        block_format_map[fmt] = ('decode_bc1', 4, 4, 8)
+    for fmt in (137, 138):
+        block_format_map[fmt] = ('decode_bc3', 4, 4, 16)
+    for fmt in (139, 140):
+        block_format_map[fmt] = ('decode_bc4', 4, 4, 8)
+    for fmt in (141, 142):
+        block_format_map[fmt] = ('decode_bc5', 4, 4, 16)
+    for fmt in (143, 144):
+        block_format_map[fmt] = ('decode_bc6', 4, 4, 16)
+    for fmt in (145, 146):
+        block_format_map[fmt] = ('decode_bc7', 4, 4, 16)
+    for fmt in (153,):
+        block_format_map[fmt] = ('decode_eacr', 4, 4, 8)
+    for fmt in (154,):
+        block_format_map[fmt] = ('decode_eacr_signed', 4, 4, 8)
+    for fmt in (155,):
+        block_format_map[fmt] = ('decode_eacrg', 4, 4, 16)
+    for fmt in (156,):
+        block_format_map[fmt] = ('decode_eacrg_signed', 4, 4, 16)
+
+    astc_blocks = (
+        (157, 4, 4), (159, 5, 4), (161, 5, 5), (163, 6, 5),
+        (165, 6, 6), (167, 8, 5), (169, 8, 6), (171, 8, 8),
+        (173, 10, 5), (175, 10, 6), (177, 10, 8), (179, 10, 10),
+        (181, 12, 10), (183, 12, 12),
+    )
+    for base, block_width, block_height in astc_blocks:
+        for fmt in (base, base + 1):
+            block_format_map[fmt] = ('decode_astc', block_width, block_height, 16)
+
+    decoder_spec = block_format_map.get(vk_format)
+    if decoder_spec is None:
+        return None
+    decoder_name, block_width, block_height, block_bytes = decoder_spec
+    if (
+        type_size != 1
+        or width <= 0
+        or height <= 0
+        or depth != 0
+        or layer_count != 0
+        or face_count != 1
+        or level_count <= 0
+        or supercompression not in (_KTX2_SUPERCOMPRESSION_NONE, _KTX2_SUPERCOMPRESSION_ZSTD)
+        or level_offset < _KTX2_HEADER_SIZE + _KTX2_LEVEL_INDEX_ENTRY_SIZE * level_count
+        or level_offset + byte_length > len(data)
+    ):
+        return None
+
+    image_data = data[level_offset:level_offset + byte_length]
+    if supercompression == _KTX2_SUPERCOMPRESSION_ZSTD:
+        try:
+            image_data = zstandard.ZstdDecompressor().decompress(
+                image_data, max_output_size=uncompressed_length
+            )
+        except zstandard.ZstdError:
+            return None
+    elif byte_length != uncompressed_length:
+        return None
+
+    expected_length = (
+        ((width + block_width - 1) // block_width)
+        * ((height + block_height - 1) // block_height)
+        * block_bytes
+    )
+    if len(image_data) != expected_length:
+        return None
+    if decoder_name == 'decode_astc':
+        extra_args = (block_width, block_height)
+    else:
+        extra_args = ()
+    return _texture2ddecoder_png(image_data, width, height, decoder_name, *extra_args)
+
+
 # libktx constants (from Ktx.Enums.cs / libktx transcode_flags.h)
 _KTX_CREATE_LOAD_IMAGE_DATA = 0x01  # KtxTextureCreateFlagBits.LoadImageDataBit
 _KTX_TTF_RGBA32 = 13  # TranscodeFormat.Rgba32
@@ -842,6 +1062,10 @@ def _convert_ktx2(data: bytes) -> bytes | None:
         buf = io.BytesIO()
         img.save(buf, format='PNG')
         return buf.getvalue()
+
+    extended_png = _decode_ktx2_extended(data)
+    if extended_png is not None:
+        return extended_png
 
     dll = _get_ktx_dll()
     if dll is None:

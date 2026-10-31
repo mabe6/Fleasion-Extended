@@ -304,6 +304,9 @@ _collect_package('numpy')
 # guaranteed to travel with the frozen executable.
 _collect_package('lz4')
 
+# KTX previews need the native block codecs for BC/ASTC and other GPU formats.
+_collect_package('texture2ddecoder')
+
 # Keep Qt collection narrow. collect_all('PyQt6') pulls in QML/QtQuick,
 # Designer, SQL drivers, multimedia, translations, and other modules that the
 # app does not use, which more than doubles the one-file executable size

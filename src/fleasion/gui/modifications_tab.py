@@ -1,4 +1,4 @@
-"""Modifications tab — combined Fishstrap Mods + FastFlags panel."""
+"""Modifications tab for Roblox content overrides (without Fast Flags)."""
 
 from __future__ import annotations
 from ..localization import tr, tr_count, translation_values
@@ -4260,30 +4260,6 @@ class ModificationsTab(QWidget):
         self._container_layout = QVBoxLayout()
         self._container_layout.setSpacing(10)
         self._container_layout.setContentsMargins(10, 10, 10, 10)
-
-        # Fast Flags
-        self._fflag_toggle = QCheckBox(
-            tr('ui.gui.modifications_tab.enable_allowlisted_fastflag_presets')
-        )
-        self._fflag_toggle.setChecked(self._manager.fast_flags_enabled)
-        self._fflag_toggle.toggled.connect(self._on_fflag_toggle)
-
-        fflag_section = CollapsibleSection(
-            tr('modifications.section.fast_flags'),
-            expanded=False,
-            header_widgets=[self._fflag_toggle],
-        )
-        self._fflag_widget = FFlagSection(
-            self._manager,
-            self._roblox_monitor,
-            self._config_manager,
-            self._proxy_master,
-            hotkey_controller=self._hotkey_controller,
-        )
-        self._fflag_widget.set_presets_enabled(self._manager.fast_flags_enabled)
-        fflag_section.add_widget(self._fflag_widget)
-
-        self._container_layout.addWidget(fflag_section)
 
         # Default Skyboxes
         sky_section = CollapsibleSection(

@@ -1,5 +1,6 @@
 import unittest
 
+from fleasion.cache.rbxm_preview import RbxmPreviewWidget
 from fleasion.cache.roblox_document import (
     RBXM_MAGIC,
     classify_roblox_document,
@@ -42,6 +43,13 @@ TEXTUREPACK_XML = b"""<roblox>
 
 
 class RobloxDocumentTests(unittest.TestCase):
+    def test_preview_parser_accepts_xml_declaration_without_a_widget(self):
+        document = RbxmPreviewWidget.parse_document_bytes(DECLARED_MODEL_XML)
+
+        self.assertEqual(len(document.roots), 1)
+        self.assertEqual(document.roots[0].class_name, "Folder")
+        self.assertEqual(document.roots[0].referent, "RBX0")
+
     def test_model_xml_exports_as_rbxm_or_rbxmx(self):
         self.assertEqual(classify_roblox_document(MODEL_XML), "rbxmx")
         self.assertEqual(get_default_roblox_document_export_format(MODEL_XML), "converted_document_rbxmx")

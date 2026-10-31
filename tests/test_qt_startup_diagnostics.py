@@ -123,3 +123,18 @@ def test_qt_message_handler_preserves_previous_handler(monkeypatch) -> None:
     qt_diagnostics._qt_message_handler(QtMsgType.QtDebugMsg, context, 'native debug detail')
 
     assert forwarded == [(QtMsgType.QtDebugMsg, 'native debug detail')]
+
+def test_local_database_editor_widget_initializes_offscreen() -> None:
+    code = """
+from PyQt6.QtWidgets import QApplication
+from fleasion.gui.local_database_editor import LocalDatabaseEditorWidget
+
+app = QApplication([])
+widget = LocalDatabaseEditorWidget(embedded=True)
+assert widget.write_sql_check.isChecked() is False
+widget.close()
+"""
+    env = os.environ.copy()
+    env['QT_QPA_PLATFORM'] = 'offscreen'
+    subprocess.run([sys.executable, '-c', code], check=True, env=env)
+

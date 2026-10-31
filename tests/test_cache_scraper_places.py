@@ -29,6 +29,76 @@ def _make_scraper():
     return CacheScraper(_CacheManager())
 
 
+def test_direct_asset_redirect_registers_cdn_and_infers_mesh_type(monkeypatch):
+    scraper = _make_scraper()
+    manager = scraper.cache_manager
+    scraper.set_enabled(True)
+
+    def run_now(func, *args, generation=None):
+        return func(*args, generation=generation)
+
+    monkeypatch.setattr(scraper, '_submit_background', run_now)
+    try:
+        scraper.process_direct_asset_response(
+            '/v1/asset/?id=123456',
+            302,
+            'https://tr.rbxcdn.com/mesh-hash?signature=do-not-store',
+            b'',
+            '',
+        )
+        base_url = 'https://tr.rbxcdn.com/mesh-hash'
+        assert scraper._url_to_asset[base_url] == [123456]
+        assert scraper.cache_logs[123456]['assetTypeId'] == 0
+
+        mesh = b'version 1.00\n' + bytes(range(64))
+        scraper.process_cdn_response(
+            base_url + '?signature=do-not-store',
+            '/mesh-hash',
+            mesh,
+            'application/octet-stream',
+        )
+
+        assert len(manager.stored) == 1
+        assert manager.stored[0]['asset_id'] == '123456'
+        assert manager.stored[0]['asset_type'] == 4
+        assert manager.stored[0]['data'] == mesh
+        assert 'signature' not in manager.stored[0]['url']
+    finally:
+        scraper._executor.shutdown(wait=False, cancel_futures=True)
+
+
+def test_direct_asset_redirect_keeps_ktx2_pack_raw(monkeypatch):
+    scraper = _make_scraper()
+    manager = scraper.cache_manager
+    scraper.set_enabled(True)
+
+    def run_now(func, *args, generation=None):
+        return func(*args, generation=generation)
+
+    monkeypatch.setattr(scraper, '_submit_background', run_now)
+    texture = _fake_roblox_ktx2(256, 1, b'direct-cdn')
+    try:
+        scraper.process_direct_asset_response(
+            '/v1/asset/?id=778899',
+            302,
+            'https://sc2.rbxcdn.com/texture-hash?token=private',
+            b'',
+            '',
+        )
+        base_url = 'https://sc2.rbxcdn.com/texture-hash'
+        scraper.process_cdn_response(
+            base_url,
+            '/texture-hash',
+            texture,
+            'application/octet-stream',
+        )
+        assert len(manager.stored) == 1
+        assert manager.stored[0]['asset_type'] == 63
+        assert manager.stored[0]['data'] == texture
+    finally:
+        scraper._executor.shutdown(wait=False, cancel_futures=True)
+
+
 def test_user_place_lookup_uses_supported_limits_and_falls_back():
     scraper = _make_scraper()
     calls = []

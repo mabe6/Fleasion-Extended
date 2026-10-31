@@ -1,0 +1,171 @@
+name: Local cache and asset tests
+
+on:
+  push:
+    branches:
+      - CacheSwap
+    paths:
+      - ".github/workflows/local-db-tests.yml"
+      - "src/fleasion/utils/asset_lookup.py"
+      - "src/fleasion/database/hash_replacer_store.py"
+      - "src/fleasion/gui/hash_replacer_tab.py"
+      - "src/fleasion/gui/rando_stuff_tab.py"
+      - "src/fleasion/modifications/manager.py"
+      - "tests/test_hash_replacer.py"
+      - "tests/test_legacy_replacer_conversion.py"
+      - "tests/test_modifications_manager.py"
+      - "tests/test_replacer_config_localization_layout.py"
+      - "tests/test_miscellaneous_layout.py"
+      - "src/fleasion/gui/asset_lookup_dialog.py"
+      - "tests/test_asset_lookup.py"
+      - "src/fleasion/database/**"
+      - "src/fleasion/gui/local_database_editor.py"
+      - "src/fleasion/gui/database_asset_explorer.py"
+      - "src/fleasion/gui/roblox_cache_tab.py"
+      - "src/fleasion/cache/cache_viewer.py"
+      - "src/fleasion/cache/mesh_processing.py"
+      - "src/fleasion/cache/rbxm_preview.py"
+      - "src/fleasion/cache/tools/ktx_to_png/ktx_to_png.py"
+      - "tests/test_mesh_processing.py"
+      - "src/fleasion/gui/settings_tab.py"
+      - "src/fleasion/gui/replacer_config.py"
+      - "tests/test_local_cache_ui.py"
+      - "tests/test_local_database_editor_ui.py"
+      - "src/fleasion/proxy/addons/cache_scraper.py"
+      - "src/fleasion/proxy/server.py"
+      - "tests/test_cache_scraper_places.py"
+      - "tests/test_animation_payload.py"
+      - "tests/test_animation_convert.py"
+      - "tests/test_proxy_tab_visibility.py"
+      - "src/fleasion/tray.py"
+      - "src/fleasion/app.py"
+      - "src/fleasion/config/manager.py"
+      - "tests/test_sqlite_browser.py"
+      - "tests/test_database_asset_explorer.py"
+      - "tests/test_roblox_cache_store.py"
+      - "tests/test_local_database_mode.py"
+  pull_request:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/local-db-tests.yml"
+      - "src/fleasion/utils/asset_lookup.py"
+      - "src/fleasion/database/hash_replacer_store.py"
+      - "src/fleasion/gui/hash_replacer_tab.py"
+      - "src/fleasion/gui/rando_stuff_tab.py"
+      - "src/fleasion/modifications/manager.py"
+      - "tests/test_hash_replacer.py"
+      - "tests/test_modifications_manager.py"
+      - "tests/test_replacer_config_localization_layout.py"
+      - "tests/test_miscellaneous_layout.py"
+      - "src/fleasion/gui/asset_lookup_dialog.py"
+      - "tests/test_asset_lookup.py"
+      - "src/fleasion/database/**"
+      - "src/fleasion/gui/local_database_editor.py"
+      - "src/fleasion/gui/database_asset_explorer.py"
+      - "src/fleasion/gui/roblox_cache_tab.py"
+      - "src/fleasion/cache/cache_viewer.py"
+      - "src/fleasion/cache/mesh_processing.py"
+      - "src/fleasion/cache/rbxm_preview.py"
+      - "src/fleasion/cache/tools/ktx_to_png/ktx_to_png.py"
+      - "tests/test_mesh_processing.py"
+      - "src/fleasion/gui/settings_tab.py"
+      - "src/fleasion/gui/replacer_config.py"
+      - "tests/test_local_cache_ui.py"
+      - "tests/test_local_database_editor_ui.py"
+      - "src/fleasion/proxy/addons/cache_scraper.py"
+      - "src/fleasion/proxy/server.py"
+      - "tests/test_cache_scraper_places.py"
+      - "tests/test_animation_payload.py"
+      - "tests/test_proxy_tab_visibility.py"
+      - "tests/test_database_asset_explorer.py"
+      - "tests/test_roblox_cache_store.py"
+      - "tests/test_sqlite_browser.py"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: local-db-tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  sqlite-editor:
+    name: Local cache and asset tests (Python 3.14)
+    runs-on: ubuntu-latest
+    env:
+      QT_QPA_PLATFORM: offscreen
+      PYTHONHASHSEED: "0"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # v8.2.0
+        with:
+          enable-cache: true
+
+      - name: Install Python
+        run: uv python install 3.14
+
+      - name: Install project and test dependencies
+        run: uv sync --locked --group dev
+
+      - name: Install Qt system libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libegl1 libgl1 libxkbcommon-x11-0 libxcb-cursor0
+
+      - name: Compile modified Python modules
+        run: >-
+          uv run python -m py_compile
+          src/fleasion/database/__init__.py
+          src/fleasion/database/sqlite_browser.py
+          src/fleasion/database/roblox_cache_store.py
+          src/fleasion/database/hash_replacer_store.py
+          src/fleasion/database/legacy_replacer_conversion.py
+          src/fleasion/database/animation_payload.py
+          src/fleasion/database/animation_convert.py
+          src/fleasion/local_database_mode.py
+          src/fleasion/gui/local_database_editor.py
+          src/fleasion/gui/database_asset_explorer.py
+          src/fleasion/proxy/addons/cache_scraper.py
+          src/fleasion/proxy/server.py
+          src/fleasion/gui/roblox_cache_tab.py
+          src/fleasion/gui/hash_replacer_tab.py
+          src/fleasion/gui/rando_stuff_tab.py
+          src/fleasion/cache/cache_viewer.py
+          src/fleasion/cache/mesh_processing.py
+          src/fleasion/cache/rbxm_preview.py
+          src/fleasion/cache/tools/ktx_to_png/ktx_to_png.py
+          tests/test_mesh_processing.py
+          tests/test_local_database_editor_ui.py
+          tests/test_database_asset_explorer.py
+          tests/test_roblox_cache_store.py
+          tests/test_local_cache_ui.py
+          src/fleasion/gui/settings_tab.py
+          src/fleasion/gui/replacer_config.py
+          tests/test_local_cache_ui.py
+          tests/test_local_database_editor_ui.py
+          tests/test_animation_payload.py tests/test_animation_convert.py tests/test_cache_scraper_places.py
+          tests/test_animation_convert.py
+          tests/test_proxy_tab_visibility.py
+          src/fleasion/tray.py
+          src/fleasion/app.py
+          src/fleasion/config/manager.py
+          src/fleasion/modifications/manager.py
+          tests/test_sqlite_browser.py
+          tests/test_database_asset_explorer.py
+          src/fleasion/utils/asset_lookup.py
+          src/fleasion/gui/asset_lookup_dialog.py
+          tests/test_asset_lookup.py
+          tests/test_hash_replacer.py
+          tests/test_legacy_replacer_conversion.py
+          tests/test_modifications_manager.py
+          tests/test_replacer_config_localization_layout.py
+          tests/test_miscellaneous_layout.py
+          tests/test_roblox_cache_store.py
+          tests/test_local_database_mode.py
+
+      - name: Run local database tests
+        run: uv run pytest -q tests/test_sqlite_browser.py tests/test_database_asset_explorer.py tests/test_proxy_tab_visibility.py tests/test_local_database_mode.py tests/test_roblox_cache_store.py tests/test_local_cache_ui.py tests/test_animation_payload.py tests/test_animation_convert.py tests/test_cache_scraper_places.py tests/test_asset_lookup.py tests/test_mesh_processing.py tests/test_local_database_editor_ui.py tests/test_hash_replacer.py tests/test_legacy_replacer_conversion.py tests/test_modifications_manager.py tests/test_replacer_config_localization_layout.py tests/test_miscellaneous_layout.py

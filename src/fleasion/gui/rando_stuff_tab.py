@@ -20,6 +20,7 @@ from PyQt6.QtCore import QEvent, QObject, Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import QPalette
 from PyQt6.QtWidgets import (
     QCheckBox,
+    QComboBox,
     QDialog,
     QFileDialog,
     QFrame,
@@ -40,6 +41,9 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+from ..database.hash_replacer_store import HashReplacerError, HashReplacerStore
+from ..database.roblox_cache_store import RobloxCacheError
+from ..utils import open_folder
 from ..utils.logging import log_buffer
 from ..utils.paths import CONFIG_DIR
 from ..utils.plural import format_count
@@ -592,10 +596,16 @@ class RandoStuffTab(QWidget):
     _PRIVATE_GAME_ENDPOINT = '/v1/join-private-game'
     _RESERVED_GAME_ENDPOINT = '/v1/join-reserved-game'
 
-    def __init__(self, parent=None, config_manager=None, proxy_master=None):
+    def __init__(
+        self, parent=None, config_manager=None, proxy_master=None,
+        hash_asset_store=None, cache_store=None,
+    ):
         super().__init__(parent)
         self._config = config_manager
         self._proxy_master = proxy_master
+        self._hash_asset_store = hash_asset_store
+        self._cache_store = cache_store
+        self._legacy_config_path: Path | None = None
         self._qt_destroyed = False
         self.destroyed.connect(self._on_qt_destroyed)
         self._invoker = _Invoker(self)
@@ -903,6 +913,89 @@ class RandoStuffTab(QWidget):
         root.setContentsMargins(10, 10, 10, 10)
         root.setSpacing(10)
 
+        # Imported source files are staged for the independent cache-hash Replacer.
+        if self._hash_asset_store is None:
+            hash_root = (
+                Path(self._config.configs_folder).parent / "HashReplacer"
+                if self._config is not None and hasattr(self._config, "configs_folder")
+                else None
+            )
+            self._hash_asset_store = HashReplacerStore(root=hash_root)
+        self._hash_assets_section = CollapsibleSection(
+            "Asset Hash Library",
+            expanded=True,
+        )
+        hash_asset_body = QWidget()
+        hash_asset_layout = QVBoxLayout(hash_asset_body)
+        hash_asset_layout.setContentsMargins(0, 0, 0, 0)
+        hash_asset_layout.setSpacing(6)
+        hash_asset_layout.addWidget(QLabel(
+            "Import replacement files here. Files are stored by SHA-256 in a separate library. "
+            "The Roblox cache is changed only when you apply a mapping in the separate Asset Hash editor."
+        ))
+        hash_asset_buttons = QHBoxLayout()
+        self._hash_import_files_button = QPushButton("Import file(s)…")
+        self._hash_import_files_button.clicked.connect(self._import_hash_asset_files)
+        hash_asset_buttons.addWidget(self._hash_import_files_button)
+        self._hash_import_folder_button = QPushButton("Import folder…")
+        self._hash_import_folder_button.clicked.connect(self._import_hash_asset_folder)
+        hash_asset_buttons.addWidget(self._hash_import_folder_button)
+        self._hash_open_assets_button = QPushButton("Open Asset Hash folder")
+        self._hash_open_assets_button.clicked.connect(
+            lambda: open_folder(self._hash_asset_store.assets_dir)
+        )
+        hash_asset_buttons.addWidget(self._hash_open_assets_button)
+        hash_asset_buttons.addStretch(1)
+        self._hash_open_editor_button = QPushButton("Manage Asset Hash mappings…")
+        self._hash_open_editor_button.clicked.connect(self._open_hash_replacer)
+        hash_asset_buttons.addWidget(self._hash_open_editor_button)
+        hash_asset_layout.addLayout(hash_asset_buttons)
+        self._hash_asset_status = QLabel(
+            f"Library: {self._hash_asset_store.assets_dir}"
+        )
+        self._hash_asset_status.setWordWrap(True)
+        hash_asset_layout.addWidget(self._hash_asset_status)
+
+        legacy_conversion = QWidget()
+        legacy_layout = QVBoxLayout(legacy_conversion)
+        legacy_layout.setContentsMargins(0, 8, 0, 0)
+        legacy_layout.setSpacing(6)
+        legacy_layout.addWidget(QLabel(
+            "Convert an old Asset-ID profile into a separate Asset Hash profile. "
+            "The original JSON in Configs is read-only and stays where it is. "
+            "Asset IDs are matched against cache URLs and metadata already resolved in Scraper DB."
+        ))
+        legacy_row = QHBoxLayout()
+        self._legacy_config_combo = QComboBox()
+        self._legacy_config_combo.setMinimumWidth(220)
+        legacy_row.addWidget(self._legacy_config_combo, 1)
+        self._legacy_browse_button = QPushButton("Choose JSON…")
+        self._legacy_browse_button.clicked.connect(self._browse_legacy_config)
+        legacy_row.addWidget(self._legacy_browse_button)
+        self._legacy_convert_button = QPushButton("Convert to Asset Hash")
+        self._legacy_convert_button.clicked.connect(self._convert_legacy_config)
+        legacy_row.addWidget(self._legacy_convert_button)
+        legacy_layout.addLayout(legacy_row)
+        self._legacy_config_status = QLabel(
+            "Profiles with unmatched Asset IDs or unavailable source files are reported, not guessed."
+        )
+        self._legacy_config_status.setWordWrap(True)
+        legacy_layout.addWidget(self._legacy_config_status)
+
+        self._show_legacy_profiles_chk = QCheckBox(
+            "Show archived Asset-ID profiles in the main Replacer"
+        )
+        self._show_legacy_profiles_chk.setChecked(
+            bool(getattr(self._config, "settings", {}).get("show_legacy_replacer_configs", False))
+        )
+        self._show_legacy_profiles_chk.toggled.connect(self._set_legacy_profiles_visible)
+        legacy_layout.addWidget(self._show_legacy_profiles_chk)
+        hash_asset_layout.addWidget(legacy_conversion)
+
+        self._refresh_legacy_config_list()
+        self._hash_assets_section.add_widget(hash_asset_body)
+        root.addWidget(self._hash_assets_section)
+
         # Match Modifications/Settings: every utility lives in the same
         # collapsible rounded section card instead of a native QGroupBox.
         self._rejoin_section = CollapsibleSection(
@@ -960,7 +1053,7 @@ class RandoStuffTab(QWidget):
 
         self._rejoin_section.add_widget(rejoin_body)
         self._rejoin_proxy_gate = ProxyGate(self._rejoin_section, compact=True)
-        root.addWidget(self._rejoin_proxy_gate)
+        # Reserved-server rejoin needs the removed HTTP interception layer.
 
         self._multi_instance_section = CollapsibleSection(
             tr('ui.gui.rando_stuff_tab.multi_instance'),
@@ -1017,11 +1110,13 @@ class RandoStuffTab(QWidget):
             tr('ui.gui.rando_stuff_tab.subplace_id_optional')
         )
         self._subplace_id_input.textChanged.connect(self._on_subplace_id_changed)
-        account_details_layout.addWidget(self._subplace_id_input)
+        # Subplace launching depends on the removed HTTP interception layer; keep the
+        # internal empty field for shared launch code, but do not expose a dead option.
 
         self._job_id_input = QLineEdit()
         self._job_id_input.setPlaceholderText(tr('ui.gui.rando_stuff_tab.jobid_optional'))
-        account_details_layout.addWidget(self._job_id_input)
+        # Joining a specific game instance relied on proxy fallback interception.
+        # The normal place/private-server launch path remains available without it.
 
         am_btns = QHBoxLayout()
         self._add_acct_btn = QPushButton(tr('ui.gui.rando_stuff_tab.add_account'))
@@ -1129,7 +1224,7 @@ class RandoStuffTab(QWidget):
             self._username_spoofer_section,
             compact=True,
         )
-        root.addWidget(self._username_spoofer_proxy_gate)
+        # Username spoofing depends on the removed HTTP interception layer.
 
         self._animation_converter_section = CollapsibleSection(
             tr('ui.gui.rando_stuff_tab.r6_r15_animation_converter'),
@@ -1209,7 +1304,7 @@ class RandoStuffTab(QWidget):
             self._subplace_blacklist_section,
             compact=True,
         )
-        root.addWidget(self._subplace_blacklist_proxy_gate)
+        # Subplace blocking/stalling depends on the removed HTTP interception layer.
 
         # Give all spare viewport height to the trailing spacer.  Without a
         # positive stretch factor QVBoxLayout distributes that space back
@@ -1257,6 +1352,169 @@ class RandoStuffTab(QWidget):
         self._username_self_game_creator_chk.toggled.connect(
             lambda _checked: self._on_username_spoofer_changed()
         )
+
+    def _import_hash_asset_files(self) -> None:
+        paths, _filter = QFileDialog.getOpenFileNames(
+            self,
+            "Import replacement assets",
+            "",
+            "All files (*)",
+        )
+        if paths:
+            self._import_hash_asset_paths(paths)
+
+    def _import_hash_asset_folder(self) -> None:
+        folder = QFileDialog.getExistingDirectory(
+            self,
+            "Import replacement asset folder",
+            "",
+        )
+        if folder:
+            self._import_hash_asset_paths([folder])
+
+    def _import_hash_asset_paths(self, paths: list[str]) -> None:
+        try:
+            imported = self._hash_asset_store.import_paths(paths)
+        except (HashReplacerError, OSError) as exc:
+            self._hash_asset_status.setText(f"Import failed: {exc}")
+            QMessageBox.warning(self, "Asset Hash import", str(exc))
+            return
+        total_bytes = sum(int(item.get("size") or 0) for item in imported)
+        errors = imported[0].get("import_errors", []) if imported else []
+        message = (
+            f"Imported {len(imported):,} file(s), {total_bytes:,} bytes. "
+            "Open Manage Asset Hash mappings to assign cache hashes."
+        )
+        if errors:
+            message += f" Skipped {len(errors)} file(s): " + " | ".join(errors[:5])
+        self._hash_asset_status.setText(message)
+        log_buffer.log("HashReplacer", message)
+
+    def _open_hash_replacer(self) -> None:
+        window = self.window()
+        callback = getattr(window, "_open_hash_replacer_dialog", None)
+        if callable(callback):
+            callback()
+
+    def _refresh_legacy_config_list(self) -> None:
+        self._legacy_config_combo.clear()
+        if self._config is None:
+            self._legacy_config_combo.addItem("(No Replacer configs found)", "")
+            self._legacy_convert_button.setEnabled(False)
+            return
+        names = self._config.config_names
+        hidden = set(self._config.settings.get("hidden_legacy_replacer_configs", []))
+        candidates = [name for name in names if name in hidden and name != "Default"]
+        # Also list explicitly selected profiles if the user has enabled their visibility.
+        if not candidates:
+            candidates = [name for name in names if name != "Default"]
+        for name in candidates:
+            self._legacy_config_combo.addItem(f"{name}.json", name)
+        if not candidates:
+            self._legacy_config_combo.addItem("(No archived profiles found)", "")
+        self._legacy_convert_button.setEnabled(bool(candidates))
+        if self._legacy_config_path is None:
+            self._legacy_config_status.setText(
+                f"{len(candidates)} profile(s) available. The source JSON will not be modified."
+            )
+
+    def _browse_legacy_config(self) -> None:
+        initial = str(self._config.configs_folder) if self._config is not None else ""
+        path, _selected = QFileDialog.getOpenFileName(
+            self,
+            "Choose legacy Asset-ID Replacer JSON",
+            initial,
+            "Replacer configs (*.json);;All files (*.*)",
+        )
+        if not path:
+            return
+        self._legacy_config_path = Path(path)
+        label = self._legacy_config_path.name
+        self._legacy_config_combo.addItem(f"{label} (file)", str(self._legacy_config_path))
+        self._legacy_config_combo.setCurrentIndex(self._legacy_config_combo.count() - 1)
+        self._legacy_config_status.setText(
+            f"Selected {self._legacy_config_path}. The source file will remain unchanged."
+        )
+
+    def _set_legacy_profiles_visible(self, visible: bool) -> None:
+        window = self.window()
+        callback = getattr(window, "set_legacy_profiles_visible", None)
+        if callable(callback):
+            callback(visible)
+        self._refresh_legacy_config_list()
+
+    def _convert_legacy_config(self) -> None:
+        from ..database.legacy_replacer_conversion import convert_legacy_replacer_profile
+        from ..utils.asset_lookup import resolve_asset_cdn_hash
+
+        selected = self._legacy_config_combo.currentData()
+        if not selected:
+            QMessageBox.information(self, "Asset Hash conversion", "Choose a Replacer JSON profile first.")
+            return
+        try:
+            selected_text = str(selected)
+            if selected_text.casefold().endswith(".json") or Path(selected_text).is_file():
+                source_path = Path(selected_text)
+                if not source_path.is_file():
+                    raise HashReplacerError(f"Config file does not exist: {source_path}")
+                import json
+
+                with source_path.open("r", encoding="utf-8-sig") as handle:
+                    source_data = json.load(handle)
+                rules = (
+                    source_data.get("replacement_rules", [])
+                    if isinstance(source_data, dict)
+                    else source_data
+                )
+                profile_name = source_path.stem
+            else:
+                profile_name = selected_text
+                rules = self._config.get_replacement_rules(profile_name)
+            if self._cache_store is None:
+                raise HashReplacerError("Scraper DB cache store is not available.")
+            self._legacy_convert_button.setEnabled(False)
+            report = convert_legacy_replacer_profile(
+                profile_name,
+                rules,
+                cache_store=self._cache_store,
+                asset_store=self._hash_asset_store,
+                cached_metadata=getattr(self._config, "settings", {}).get(
+                    "local_db_cache_metadata", {}
+                ),
+                cdn_hash_resolver=resolve_asset_cdn_hash,
+            )
+        except (OSError, ValueError, HashReplacerError, RobloxCacheError) as exc:
+            QMessageBox.warning(self, "Asset Hash conversion failed", str(exc))
+            self._legacy_config_status.setText(f"Conversion failed: {exc}")
+            self._legacy_convert_button.setEnabled(True)
+            return
+        finally:
+            self._legacy_convert_button.setEnabled(True)
+
+        profile_name = str(report['profile_name'])
+        self._config.settings['last_hash_replacer_profile'] = profile_name
+        self._config.save()
+        window = self.window()
+        hash_tab = getattr(window, '_hash_replacer_tab', None)
+        if hash_tab is not None:
+            hash_tab.refresh_profiles(profile_name)
+
+        skipped = report.get("skipped", [])
+        message = (
+            f"Created Asset Hash profile '{report['profile_name']}' with "
+            f"{report['rules_created']} rule(s). Matched "
+            f"{report['asset_ids_matched']}/{report['asset_ids_requested']} Asset ID(s), "
+            f"{report.get('asset_ids_resolved_by_cdn', 0)} resolved via Asset Delivery. "
+            "The original JSON was not changed."
+        )
+        if skipped:
+            message += "\n\nNot converted:\n• " + "\n• ".join(skipped[:12])
+            if len(skipped) > 12:
+                message += f"\n• … and {len(skipped) - 12} more"
+        self._legacy_config_status.setText(message)
+        log_buffer.log("HashReplacer", message)
+        self._refresh_legacy_config_list()
+        QMessageBox.information(self, "Asset Hash conversion", message)
 
     def changeEvent(self, a0: QEvent | None):
         super().changeEvent(a0)

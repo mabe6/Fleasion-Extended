@@ -117,6 +117,38 @@ def test_open_configs_uses_config_manager_active_folder(tmp_path, monkeypatch):
     assert app is not None
 
 
+
+def test_nonempty_old_default_is_archived_and_clean_default_created(tmp_path, monkeypatch):
+    app = _qapp()
+    config_dir = tmp_path / 'FleasionNT'
+    configs_dir = config_dir / 'configs'
+    monkeypatch.setattr(manager_module, 'CONFIG_DIR', config_dir)
+    monkeypatch.setattr(manager_module, 'CONFIG_FILE', config_dir / 'settings.json')
+    monkeypatch.setattr(manager_module, 'CONFIGS_FOLDER', configs_dir)
+
+    config_manager = manager_module.ConfigManager()
+    old_rules = [{
+        'name': 'Old default rule',
+        'replace_ids': [123456],
+        'mode': 'id',
+        'with_id': 654321,
+        'enabled': True,
+    }]
+    config_manager.set_replacement_rules('Default', old_rules)
+
+    window = ReplacerConfigWindow(config_manager)
+    try:
+        assert config_manager.get_replacement_rules('Default') == []
+        assert config_manager.get_replacement_rules('Legacy Default') == old_rules
+        assert window._visible_replacer_config_names() == ['Default']
+        assert 'Legacy Default' in config_manager.settings['hidden_legacy_replacer_configs']
+        assert config_manager.settings['last_config'] == 'Default'
+    finally:
+        window.close()
+    assert app is not None
+
+
+
 def test_enabled_menu_button_press_loads_new_config_file_from_disk(tmp_path, monkeypatch):
     app = _qapp()
     config_dir = tmp_path / 'FleasionNT'
