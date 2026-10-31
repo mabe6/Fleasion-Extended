@@ -1445,6 +1445,7 @@ class RandoStuffTab(QWidget):
 
     def _convert_legacy_config(self) -> None:
         from ..database.legacy_replacer_conversion import convert_legacy_replacer_profile
+        from ..utils.asset_lookup import resolve_asset_cdn_hash
 
         selected = self._legacy_config_combo.currentData()
         if not selected:
@@ -1480,6 +1481,7 @@ class RandoStuffTab(QWidget):
                 cached_metadata=getattr(self._config, "settings", {}).get(
                     "local_db_cache_metadata", {}
                 ),
+                cdn_hash_resolver=resolve_asset_cdn_hash,
             )
         except (OSError, ValueError, HashReplacerError, RobloxCacheError) as exc:
             QMessageBox.warning(self, "Asset Hash conversion failed", str(exc))
