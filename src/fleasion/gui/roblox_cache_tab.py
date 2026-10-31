@@ -1499,10 +1499,30 @@ class RobloxCacheTab(QWidget):
         worker.start()
 
     def _on_slot_payload_ready(
-        self, request_id: str, payload: bytes, kind: str, document: object | None = None
+        self, request_id: str, payload: bytes, kind: str, document=...
     ) -> None:
         if request_id != self._current_preview_request_id:
             return
+        if document is ... and kind in {'anim', 'curve-anim', 'rbxm', 'xml'}:
+            # Preserve direct callers of this preview slot API; the QThread worker
+            # always passes its parsed document (or None on parse failure).
+            try:
+                from ..cache.rbxm_preview import RbxmPreviewWidget
+
+                document = RbxmPreviewWidget.parse_document_bytes(payload)
+                classes = {
+                    instance.class_name
+                    for instance in document.instances.values()
+                }
+                if 'CurveAnimation' in classes:
+                    kind = 'curve-anim'
+                elif (
+                    'KeyframeSequence' in classes
+                    or {'Keyframe', 'Pose'} <= classes
+                ):
+                    kind = 'anim'
+            except Exception:
+                document = None
         entry = self.entries_by_id.get(request_id)
         if entry is None:
             return
