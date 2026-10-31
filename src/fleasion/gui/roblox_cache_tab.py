@@ -213,7 +213,7 @@ class _CacheEntryPreviewWorker(QThread):
 
                 document = None
                 binary_model = payload.startswith(b'<roblox!')
-                xml_prefix = payload.lstrip(b'\\xef\\xbb\\xbf \\t\\r\\n')
+                xml_prefix = payload.lstrip(b'\xef\\xbb\\xbf \\t\\r\\n')
                 xml_model = (
                     xml_prefix.startswith(b'<roblox')
                     or (
