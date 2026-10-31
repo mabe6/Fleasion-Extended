@@ -237,6 +237,11 @@ class HashReplacerTab(QWidget):
         self.remove_rule_button.setEnabled(self.rules_table.rowCount() > 0)
         self.apply_button.setEnabled(self.rules_table.rowCount() > 0)
         self.restore_button.setEnabled(self.rules_table.rowCount() > 0)
+        if not config["rules"] and self.asset_combo.count() > 0:
+            self.status_label.setText(
+                f"No rules found in '{name}'. Select a cached target hash and an imported "
+                "replacement asset, or convert a legacy Asset-ID profile in Miscellaneous."
+            )
 
     def _create_profile(self) -> None:
         name, accepted = QInputDialog.getText(self, "New hash profile", "Profile name:")
